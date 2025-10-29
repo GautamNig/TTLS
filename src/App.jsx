@@ -1,36 +1,118 @@
 import React, { useState, useEffect } from 'react'
 import { createClient } from '@supabase/supabase-js'
-import './App.css'
+import './index.css'
 
-// Initialize Supabase
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://jgwwikvqvdfzxuboqgxr.supabase.co'
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Impnd3dpa3ZxdmRmenh1Ym9xZ3hyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjE3NTgxMTgsImV4cCI6MjA3NzMzNDExOH0.XvjyWN0CdPVYKTuHK4-ukl4YUPf17n2XQOTEjFyLXKA'
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
 
 const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
 function App() {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [users, setUsers] = useState([])
 
   useEffect(() => {
-    // Check active sessions and sets the user
-    getSession()
-
-    // Listen for changes on auth state (logged in, signed out, etc.)
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (event, session) => {
-      setUser(session?.user ?? null)
-      setLoading(false)
-    })
-
-    return () => subscription.unsubscribe()
+    checkUser()
+    setupRealtimeSubscription()
   }, [])
 
-  async function getSession() {
-    const { data: { session } } = await supabase.auth.getSession()
-    setUser(session?.user ?? null)
-    setLoading(false)
+  const checkUser = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (session?.user) {
+        setUser(session.user)
+        await markUserOnline(session.user)
+      }
+      setLoading(false)
+    } catch (error) {
+      console.error('Error checking user:', error)
+      setLoading(false)
+    }
+  }
+
+  const markUserOnline = async (user) => {
+    try {
+      // Generate random position for this user
+      const randomX = Math.random() * 0.9 + 0.05
+      const randomY = Math.random() * 0.9 + 0.05
+      
+      const { error } = await supabase
+        .from('user_positions')
+        .upsert({
+          user_id: user.id,
+          email: user.email,
+          relative_x: randomX,
+          relative_y: randomY,
+          luminosity: 1.0,
+          is_online: true,
+          last_seen: new Date().toISOString()
+        }, {
+          onConflict: 'user_id'
+        })
+
+      if (error) throw error
+    } catch (error) {
+      console.error('Error marking user online:', error)
+    }
+  }
+
+  const markUserOffline = async (userId) => {
+    try {
+      const { error } = await supabase
+        .from('user_positions')
+        .update({
+          is_online: false,
+          luminosity: 0.1,
+          last_seen: new Date().toISOString()
+        })
+        .eq('user_id', userId)
+
+      if (error) throw error
+    } catch (error) {
+      console.error('Error marking user offline:', error)
+    }
+  }
+
+  const setupRealtimeSubscription = () => {
+    const subscription = supabase
+      .channel('user_positions_channel')
+      .on('postgres_changes', 
+        { 
+          event: '*', 
+          schema: 'public', 
+          table: 'user_positions' 
+        }, 
+        () => {
+          fetchAllUsers()
+        }
+      )
+      .subscribe()
+
+    fetchAllUsers()
+
+    return () => {
+      subscription.unsubscribe()
+    }
+  }
+
+  const fetchAllUsers = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('user_positions')
+        .select('*')
+        .order('created_at', { ascending: true })
+
+      if (!error && data) {
+        console.log('📊 Users and their positions:')
+        data.forEach(user => {
+          console.log(`User: ${user.email}, X: ${user.relative_x}, Y: ${user.relative_y}, Online: ${user.is_online}`)
+        })
+        setUsers(data)
+      }
+    } catch (error) {
+      console.error('Error fetching users:', error)
+    }
   }
 
   const signInWithGoogle = async () => {
@@ -43,26 +125,30 @@ function App() {
       })
       if (error) throw error
     } catch (error) {
-      console.error('Error signing in:', error.message)
-      alert('Error signing in: ' + error.message)
+      alert('Error signing in. Please try again.')
     }
   }
 
   const signOut = async () => {
+    if (user) {
+      await markUserOffline(user.id)
+    }
     try {
       const { error } = await supabase.auth.signOut()
       if (error) throw error
     } catch (error) {
-      console.error('Error signing out:', error.message)
+      console.error('Error signing out')
     }
   }
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="min-h-screen bg-night-sky flex items-center justify-center">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto"></div>
-          <p className="mt-4 text-gray-600">Loading...</p>
+          <div className="animate-pulse">
+            <div className="w-4 h-4 bg-white rounded-full mx-auto mb-3 shadow-lg shadow-white/50"></div>
+            <p className="text-white text-sm">Loading universe...</p>
+          </div>
         </div>
       </div>
     )
@@ -72,22 +158,22 @@ function App() {
     return <AuthPage onSignIn={signInWithGoogle} />
   }
 
-  return <Dashboard user={user} onSignOut={signOut} />
+  return <NightSky user={user} users={users} onSignOut={signOut} />
 }
 
 function AuthPage({ onSignIn }) {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50">
-      <div className="bg-white p-8 rounded-lg shadow-md w-96">
+    <div className="min-h-screen bg-night-sky flex items-center justify-center relative overflow-hidden">
+      <div className="bg-black/70 backdrop-blur-sm p-8 rounded-2xl border border-white/30 w-96 relative z-10">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-gray-800">TTLS</h1>
-          <p className="text-gray-600 mt-2">Task Tracking & Learning System</p>
+          <h1 className="text-4xl font-bold text-white mb-2">✨ TTLS</h1>
+          <p className="text-white/80 text-lg">Join the Night Sky</p>
         </div>
         
         <div className="space-y-4">
           <button
             onClick={onSignIn}
-            className="w-full flex items-center justify-center gap-3 bg-white border border-gray-300 rounded-lg px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+            className="w-full flex items-center justify-center gap-3 bg-white hover:bg-gray-100 rounded-lg px-6 py-3 font-semibold text-gray-800 transition-all duration-300 transform hover:scale-105 shadow-lg"
           >
             <GoogleIcon />
             Sign in with Google
@@ -95,8 +181,8 @@ function AuthPage({ onSignIn }) {
         </div>
 
         <div className="mt-6 text-center">
-          <p className="text-sm text-gray-500">
-            Welcome to TTLS - Your productivity companion
+          <p className="text-white/70 text-sm">
+            Become a glowing pixel in our digital universe
           </p>
         </div>
       </div>
@@ -104,62 +190,110 @@ function AuthPage({ onSignIn }) {
   )
 }
 
-function Dashboard({ user, onSignOut }) {
+function NightSky({ user, users, onSignOut }) {
+  const onlineUsers = users.filter(u => u.is_online)
+  const currentUserData = users.find(u => u.user_id === user.id)
+
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="max-w-6xl mx-auto px-4 py-8">
-        <header className="bg-white shadow-sm rounded-lg p-6 mb-8">
-          <div className="flex justify-between items-center">
-            <div>
-              <h1 className="text-2xl font-bold text-gray-800">TTLS Dashboard</h1>
-              <p className="text-gray-600">Welcome, {user.email}</p>
+    <div className="min-h-screen bg-night-sky relative overflow-hidden" style={{ height: '100vh', width: '100vw' }}>
+      {/* Simple background */}
+      <div className="absolute inset-0 bg-gradient-to-br from-blue-900/20 to-purple-900/20"></div>
+
+      {/* User glowing pixels */}
+      {users.map((userData, index) => (
+        <GlowingPixel 
+          key={userData.user_id} 
+          userData={userData} 
+          isCurrentUser={userData.user_id === user.id}
+          userNumber={index + 1}
+        />
+      ))}
+
+      {/* Controls */}
+      <div className="absolute top-4 right-4 z-50">
+        <div className="bg-black/90 backdrop-blur-sm rounded-lg p-4 border border-white/20">
+          <div className="flex items-center gap-4">
+            <div className="text-white">
+              <p className="text-sm font-semibold truncate max-w-[150px]">{user.email}</p>
+              <p className="text-xs text-white/80">
+                Online: <span className="text-green-400 font-bold">{onlineUsers.length}</span> / {users.length}
+              </p>
             </div>
             <button
               onClick={onSignOut}
-              className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg transition-colors"
+              className="bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded text-sm transition-colors"
             >
               Sign Out
             </button>
           </div>
-        </header>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          <div className="bg-white p-6 rounded-lg shadow-sm border">
-            <h3 className="text-lg font-semibold text-gray-800 mb-2">Total Tasks</h3>
-            <p className="text-3xl font-bold text-blue-600">0</p>
-          </div>
-          
-          <div className="bg-white p-6 rounded-lg shadow-sm border">
-            <h3 className="text-lg font-semibold text-gray-800 mb-2">Completed</h3>
-            <p className="text-3xl font-bold text-green-600">0</p>
-          </div>
-          
-          <div className="bg-white p-6 rounded-lg shadow-sm border">
-            <h3 className="text-lg font-semibold text-gray-800 mb-2">In Progress</h3>
-            <p className="text-3xl font-bold text-yellow-600">0</p>
-          </div>
-        </div>
-
-        <div className="mt-8 bg-white rounded-lg shadow-sm border p-6">
-          <h2 className="text-xl font-semibold text-gray-800 mb-4">Quick Actions</h2>
-          <div className="flex gap-4">
-            <button className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg transition-colors">
-              Add New Task
-            </button>
-            <button className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-lg transition-colors">
-              View Reports
-            </button>
-            <button className="bg-purple-500 hover:bg-purple-600 text-white px-4 py-2 rounded-lg transition-colors">
-              Settings
-            </button>
-          </div>
-        </div>
-
-        <div className="mt-8 bg-white rounded-lg shadow-sm border p-6">
-          <h2 className="text-xl font-semibold text-gray-800 mb-4">Recent Activity</h2>
-          <p className="text-gray-500">Your activity will appear here...</p>
         </div>
       </div>
+
+      {/* Debug panel - shows positions */}
+      <div className="absolute bottom-4 left-4 z-50">
+        <div className="bg-black/90 backdrop-blur-sm rounded-lg p-4 border border-white/20 max-w-xs">
+          <h3 className="text-white font-semibold mb-2 text-sm">🌌 Debug Info</h3>
+          <div className="text-white/80 text-xs space-y-1">
+            <p>Total users: {users.length}</p>
+            <p>Online users: {onlineUsers.length}</p>
+            <p>Screen: {window.innerWidth} × {window.innerHeight}</p>
+            {users.slice(0, 3).map((user, i) => (
+              <p key={user.user_id}>
+                User {i+1}: X:{user.relative_x?.toFixed(2)} Y:{user.relative_y?.toFixed(2)}
+              </p>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function GlowingPixel({ userData, isCurrentUser, userNumber }) {
+  const [luminosity, setLuminosity] = useState(userData.luminosity || 0.1)
+
+  useEffect(() => {
+    if (isCurrentUser && userData.is_online) {
+      setLuminosity(1.0)
+      const timer = setTimeout(() => {
+        setLuminosity(0.7)
+      }, 3000)
+      return () => clearTimeout(timer)
+    } else if (!userData.is_online) {
+      setLuminosity(0.1)
+    } else {
+      setLuminosity(0.7)
+    }
+  }, [userData.is_online, userData.luminosity, isCurrentUser])
+
+  // Convert relative coordinates (0-1) to absolute pixels
+  const x = (userData.relative_x || 0.5) * 100
+  const y = (userData.relative_y || 0.5) * 100
+
+  const pulse = userData.is_online ? 1 + Math.sin(Date.now() * 0.003) * 0.3 : 1
+  const glowColor = userData.is_online ? '#ffffff' : '#ff4444'
+
+  return (
+    <div
+      className="absolute transform -translate-x-1/2 -translate-y-1/2 z-10"
+      style={{
+        left: `${x}%`,
+        top: `${y}%`,
+        position: 'absolute',
+      }}
+    >
+      {/* Simple glowing dot */}
+      <div
+        className="rounded-full"
+        style={{
+          width: '12px',
+          height: '12px',
+          backgroundColor: glowColor,
+          boxShadow: `0 0 20px 10px ${glowColor}${userData.is_online ? '80' : '40'}`,
+          transform: `scale(${pulse})`,
+          opacity: luminosity,
+        }}
+      />
     </div>
   )
 }

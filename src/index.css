@@ -1,6 +1,4 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
 
 :root {
   font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
@@ -12,8 +10,67 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+  overflow: hidden;
+  color: white;
 }
 
 #root {
   width: 100%;
+  height: 100vh;
+}
+
+/* Night sky background */
+.bg-night-sky {
+  background: linear-gradient(135deg, #0c0e2b 0%, #1e293b 50%, #0f172a 100%);
+  width: 100vw;
+  height: 100vh;
+  position: fixed;
+  top: 0;
+  left: 0;
+}
+
+/* Twinkling animation */
+@keyframes twinkle {
+  0%, 100% { 
+    opacity: 0.3; 
+  }
+  50% { 
+    opacity: 1; 
+  }
+}
+
+.animate-twinkle {
+  animation: twinkle 4s ease-in-out infinite;
+}
+
+/* Ensure all text is white */
+* {
+  color: white;
+}
+
+/* Force white text throughout the app */
+.text-white {
+  color: white !important;
+}
+
+/* Remove any default black text */
+.text-gray-800,
+.text-gray-700,
+.text-gray-600,
+.text-gray-500 {
+  color: white !important;
+}
+
+/* Fix for any remaining black text */
+.text-black {
+  color: white !important;
+}
+
+/* Ensure full coverage */
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
 }
