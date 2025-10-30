@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { createClient } from '@supabase/supabase-js'
+import AuthPage from './components/AuthPage'
+import NightSky from './components/NightSky'
 import './index.css'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
@@ -11,55 +13,168 @@ function App() {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
   const [users, setUsers] = useState([])
+  const [initialized, setInitialized] = useState(false)
 
   useEffect(() => {
-    checkUser()
-    setupRealtimeSubscription()
+    console.log('🚀 App starting...')
+    initializeApp()
   }, [])
 
-  const checkUser = async () => {
+  const initializeApp = async () => {
     try {
+      console.log('🔄 Initializing app...')
+      
+      // Check for existing session
       const { data: { session } } = await supabase.auth.getSession()
+      console.log('🔐 Session check:', session ? `User: ${session.user.email} (ID: ${session.user.id})` : 'No user')
+      
       if (session?.user) {
+        console.log('✅ Setting user from session')
         setUser(session.user)
         await markUserOnline(session.user)
       }
+      
+      setInitialized(true)
       setLoading(false)
+      
     } catch (error) {
-      console.error('Error checking user:', error)
+      console.error('❌ Initialization error:', error)
+      setInitialized(true)
       setLoading(false)
     }
   }
 
+  // Real-time subscription for live updates
+  useEffect(() => {
+    if (!initialized) return;
+
+    console.log('🔔 Setting up real-time subscription...');
+
+    const channel = supabase
+      .channel('user_positions_changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'user_positions',
+        },
+        (payload) => {
+          console.log('🔔 Real-time update received:', payload.eventType, payload.new?.email, 'Online:', payload.new?.is_online)
+          
+          // Immediately update the users list when we get real-time updates
+          if (payload.eventType === 'INSERT') {
+            console.log('🆕 New user added via real-time:', payload.new.email)
+            setUsers(prev => {
+              const exists = prev.find(u => u.user_id === payload.new.user_id)
+              if (!exists) {
+                return [...prev, payload.new]
+              }
+              return prev
+            })
+          } 
+          else if (payload.eventType === 'UPDATE') {
+            console.log('📝 User updated via real-time:', payload.new.email, 'Online:', payload.new.is_online)
+            setUsers(prev => prev.map(u => 
+              u.user_id === payload.new.user_id ? { ...u, ...payload.new } : u
+            ))
+          }
+          else if (payload.eventType === 'DELETE') {
+            console.log('🗑️ User deleted via real-time:', payload.old.user_id)
+            setUsers(prev => prev.filter(u => u.user_id !== payload.old.user_id))
+          }
+        }
+      )
+      .subscribe((status) => {
+        console.log('🔔 Real-time subscription status:', status)
+      })
+
+    return () => {
+      console.log('🔔 Cleaning up real-time subscription')
+      supabase.removeChannel(channel)
+    }
+  }, [initialized])
+
+  // Also fetch all users periodically as backup
+  useEffect(() => {
+    if (!initialized) return
+
+    console.log('🔄 Starting backup polling every 10 seconds...')
+    fetchAllUsers() // Initial fetch
+    
+    const interval = setInterval(() => {
+      fetchAllUsers()
+    }, 10000)
+
+    return () => clearInterval(interval)
+  }, [initialized])
+
   const markUserOnline = async (user) => {
     try {
-      // Generate random position for this user
-      const randomX = Math.random() * 0.9 + 0.05
-      const randomY = Math.random() * 0.9 + 0.05
+      console.log('📍 Marking user online:', user.email, 'ID:', user.id)
       
-      const { error } = await supabase
+      // First check if this user already exists in our positions table
+      const { data: existingUser, error: fetchError } = await supabase
         .from('user_positions')
-        .upsert({
-          user_id: user.id,
-          email: user.email,
-          relative_x: randomX,
-          relative_y: randomY,
-          luminosity: 1.0,
-          is_online: true,
-          last_seen: new Date().toISOString()
-        }, {
+        .select('*')
+        .eq('user_id', user.id)
+        .maybeSingle()
+
+      if (fetchError) {
+        console.error('❌ Error checking existing user:', fetchError)
+      }
+
+      let updateData = {
+        user_id: user.id,
+        email: user.email,
+        is_online: true,
+        luminosity: 1.0,
+        last_seen: new Date().toISOString()
+      }
+
+      if (existingUser) {
+        // User exists - keep their initial position, update current position to initial
+        console.log('📍 Existing user found, keeping position:', existingUser.initial_x.toFixed(2), existingUser.initial_y.toFixed(2))
+        updateData.current_x = existingUser.initial_x
+        updateData.current_y = existingUser.initial_y
+        // Don't update initial_x and initial_y - keep them permanent
+      } else {
+        // New user - generate permanent random position
+        const randomX = Math.random() * 0.8 + 0.1 // 10% to 90%
+        const randomY = Math.random() * 0.8 + 0.1 // 10% to 90%
+        console.log('📍 New user, assigning permanent position:', randomX.toFixed(2), randomY.toFixed(2))
+        updateData.initial_x = randomX
+        updateData.initial_y = randomY
+        updateData.current_x = randomX
+        updateData.current_y = randomY
+      }
+      
+      const { data, error } = await supabase
+        .from('user_positions')
+        .upsert(updateData, {
           onConflict: 'user_id'
         })
+        .select()
 
-      if (error) throw error
+      if (error) {
+        console.error('❌ Error marking user online:', error)
+        console.error('❌ Error details:', error.message)
+        return
+      }
+      
+      console.log('✅ User marked online:', data?.[0]?.email, 'Online:', data?.[0]?.is_online)
+      
     } catch (error) {
-      console.error('Error marking user online:', error)
+      console.error('❌ Error in markUserOnline:', error)
     }
   }
 
   const markUserOffline = async (userId) => {
     try {
-      const { error } = await supabase
+      console.log('📍 Marking user offline in database:', userId)
+      
+      // Use direct database update
+      const { data, error } = await supabase
         .from('user_positions')
         .update({
           is_online: false,
@@ -67,32 +182,24 @@ function App() {
           last_seen: new Date().toISOString()
         })
         .eq('user_id', userId)
+        .select()
 
-      if (error) throw error
+      if (error) {
+        console.error('❌ Database error marking user offline:', error)
+        console.error('❌ Error details:', error.message)
+        throw error
+      }
+      
+      if (data && data.length > 0) {
+        console.log('✅ User successfully marked offline:', data[0].email)
+        console.log('✅ is_online set to:', data[0].is_online)
+      } else {
+        console.log('⚠️ No user found to mark offline')
+      }
+      
     } catch (error) {
-      console.error('Error marking user offline:', error)
-    }
-  }
-
-  const setupRealtimeSubscription = () => {
-    const subscription = supabase
-      .channel('user_positions_channel')
-      .on('postgres_changes', 
-        { 
-          event: '*', 
-          schema: 'public', 
-          table: 'user_positions' 
-        }, 
-        () => {
-          fetchAllUsers()
-        }
-      )
-      .subscribe()
-
-    fetchAllUsers()
-
-    return () => {
-      subscription.unsubscribe()
+      console.error('❌ Error marking user offline:', error)
+      throw error
     }
   }
 
@@ -103,51 +210,129 @@ function App() {
         .select('*')
         .order('created_at', { ascending: true })
 
-      if (!error && data) {
-        console.log('📊 Users and their positions:')
-        data.forEach(user => {
-          console.log(`User: ${user.email}, X: ${user.relative_x}, Y: ${user.relative_y}, Online: ${user.is_online}`)
-        })
+      if (error) {
+        console.error('❌ Error fetching users:', error)
+        return
+      }
+
+      if (data) {
+        console.log('📊 Users fetched via API:', data.length)
         setUsers(data)
       }
     } catch (error) {
-      console.error('Error fetching users:', error)
+      console.error('❌ Error in fetchAllUsers:', error)
     }
   }
 
   const signInWithGoogle = async () => {
     try {
+      console.log('🔐 Starting Google sign in...')
+      
+      // IMPORTANT: Use a specific redirect URL and skip nonce check for development
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
           redirectTo: window.location.origin,
+          skipBrowserRedirect: false,
+          queryParams: {
+            access_type: 'offline',
+            prompt: 'consent',
+          }
         },
       })
+      
       if (error) throw error
     } catch (error) {
+      console.error('❌ Sign in error:', error)
       alert('Error signing in. Please try again.')
     }
   }
 
-  const signOut = async () => {
-    if (user) {
-      await markUserOffline(user.id)
-    }
+  const handleSignOut = async () => {
     try {
+      console.log('🚪 Signing out process started...')
+      
+      if (user) {
+        console.log('📍 Step 1: Marking user offline in database')
+        await markUserOffline(user.id)
+        console.log('✅ Database update completed')
+      }
+      
+      console.log('🔐 Step 2: Calling Supabase auth signOut')
       const { error } = await supabase.auth.signOut()
-      if (error) throw error
+      if (error) {
+        console.error('❌ Sign out auth error:', error)
+        throw error
+      }
+      
+      console.log('✅ Step 3: Auth sign out successful')
+      
+      // Clear local state immediately
+      setUser(null)
+      setUsers([])
+      console.log('✅ Step 4: Local state cleared')
+      
     } catch (error) {
-      console.error('Error signing out')
+      console.error('❌ Sign out error:', error)
+      alert('Error signing out. Please try again.')
     }
   }
+
+  const resetAllPositions = async () => {
+    try {
+      console.log('🔄 Resetting all positions to initial...')
+      const { error } = await supabase.rpc('reset_user_positions')
+      if (error) throw error
+      console.log('✅ Positions reset')
+    } catch (error) {
+      console.error('❌ Error resetting positions:', error)
+    }
+  }
+
+  // Auth state listener
+  useEffect(() => {
+    if (!initialized) return
+    
+    console.log('👂 Setting up auth listener...')
+    
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log('🔐 Auth state changed:', event, session?.user?.email, 'ID:', session?.user?.id)
+      
+      if (event === 'SIGNED_OUT') {
+        console.log('👋 User signed out - clearing state')
+        setUser(null)
+        setUsers([])
+      } else if (event === 'SIGNED_IN' && session?.user) {
+        console.log('👋 User signed in:', session.user.email, 'ID:', session.user.id)
+        
+        // Check if this is the same user as before
+        if (user && user.id === session.user.id) {
+          console.log('🔄 Same user re-logged in')
+        } else {
+          console.log('🆕 New/different user logged in')
+        }
+        
+        setUser(session.user)
+        await markUserOnline(session.user)
+      } else if (event === 'USER_UPDATED' && session?.user) {
+        console.log('👤 User updated:', session.user.email)
+        setUser(session.user)
+      }
+    })
+
+    return () => {
+      console.log('👂 Cleaning up auth listener')
+      subscription?.unsubscribe()
+    }
+  }, [initialized, user])
 
   if (loading) {
     return (
       <div className="min-h-screen bg-night-sky flex items-center justify-center">
         <div className="text-center">
           <div className="animate-pulse">
-            <div className="w-4 h-4 bg-white rounded-full mx-auto mb-3 shadow-lg shadow-white/50"></div>
-            <p className="text-white text-sm">Loading universe...</p>
+            <div className="w-8 h-8 bg-white rounded-full mx-auto mb-4 shadow-lg shadow-white/50"></div>
+            <p className="text-white text-lg">Initializing TTLS...</p>
           </div>
         </div>
       </div>
@@ -158,154 +343,13 @@ function App() {
     return <AuthPage onSignIn={signInWithGoogle} />
   }
 
-  return <NightSky user={user} users={users} onSignOut={signOut} />
-}
-
-function AuthPage({ onSignIn }) {
   return (
-    <div className="min-h-screen bg-night-sky flex items-center justify-center relative overflow-hidden">
-      <div className="bg-black/70 backdrop-blur-sm p-8 rounded-2xl border border-white/30 w-96 relative z-10">
-        <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold text-white mb-2">✨ TTLS</h1>
-          <p className="text-white/80 text-lg">Join the Night Sky</p>
-        </div>
-        
-        <div className="space-y-4">
-          <button
-            onClick={onSignIn}
-            className="w-full flex items-center justify-center gap-3 bg-white hover:bg-gray-100 rounded-lg px-6 py-3 font-semibold text-gray-800 transition-all duration-300 transform hover:scale-105 shadow-lg"
-          >
-            <GoogleIcon />
-            Sign in with Google
-          </button>
-        </div>
-
-        <div className="mt-6 text-center">
-          <p className="text-white/70 text-sm">
-            Become a glowing pixel in our digital universe
-          </p>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function NightSky({ user, users, onSignOut }) {
-  const onlineUsers = users.filter(u => u.is_online)
-  const currentUserData = users.find(u => u.user_id === user.id)
-
-  return (
-    <div className="min-h-screen bg-night-sky relative overflow-hidden" style={{ height: '100vh', width: '100vw' }}>
-      {/* Simple background */}
-      <div className="absolute inset-0 bg-gradient-to-br from-blue-900/20 to-purple-900/20"></div>
-
-      {/* User glowing pixels */}
-      {users.map((userData, index) => (
-        <GlowingPixel 
-          key={userData.user_id} 
-          userData={userData} 
-          isCurrentUser={userData.user_id === user.id}
-          userNumber={index + 1}
-        />
-      ))}
-
-      {/* Controls */}
-      <div className="absolute top-4 right-4 z-50">
-        <div className="bg-black/90 backdrop-blur-sm rounded-lg p-4 border border-white/20">
-          <div className="flex items-center gap-4">
-            <div className="text-white">
-              <p className="text-sm font-semibold truncate max-w-[150px]">{user.email}</p>
-              <p className="text-xs text-white/80">
-                Online: <span className="text-green-400 font-bold">{onlineUsers.length}</span> / {users.length}
-              </p>
-            </div>
-            <button
-              onClick={onSignOut}
-              className="bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded text-sm transition-colors"
-            >
-              Sign Out
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Debug panel - shows positions */}
-      <div className="absolute bottom-4 left-4 z-50">
-        <div className="bg-black/90 backdrop-blur-sm rounded-lg p-4 border border-white/20 max-w-xs">
-          <h3 className="text-white font-semibold mb-2 text-sm">🌌 Debug Info</h3>
-          <div className="text-white/80 text-xs space-y-1">
-            <p>Total users: {users.length}</p>
-            <p>Online users: {onlineUsers.length}</p>
-            <p>Screen: {window.innerWidth} × {window.innerHeight}</p>
-            {users.slice(0, 3).map((user, i) => (
-              <p key={user.user_id}>
-                User {i+1}: X:{user.relative_x?.toFixed(2)} Y:{user.relative_y?.toFixed(2)}
-              </p>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function GlowingPixel({ userData, isCurrentUser, userNumber }) {
-  const [luminosity, setLuminosity] = useState(userData.luminosity || 0.1)
-
-  useEffect(() => {
-    if (isCurrentUser && userData.is_online) {
-      setLuminosity(1.0)
-      const timer = setTimeout(() => {
-        setLuminosity(0.7)
-      }, 3000)
-      return () => clearTimeout(timer)
-    } else if (!userData.is_online) {
-      setLuminosity(0.1)
-    } else {
-      setLuminosity(0.7)
-    }
-  }, [userData.is_online, userData.luminosity, isCurrentUser])
-
-  // Convert relative coordinates (0-1) to absolute pixels
-  const x = (userData.relative_x || 0.5) * 100
-  const y = (userData.relative_y || 0.5) * 100
-
-  const pulse = userData.is_online ? 1 + Math.sin(Date.now() * 0.003) * 0.3 : 1
-  const glowColor = userData.is_online ? '#ffffff' : '#ff4444'
-
-  return (
-    <div
-      className="absolute transform -translate-x-1/2 -translate-y-1/2 z-10"
-      style={{
-        left: `${x}%`,
-        top: `${y}%`,
-        position: 'absolute',
-      }}
-    >
-      {/* Simple glowing dot */}
-      <div
-        className="rounded-full"
-        style={{
-          width: '12px',
-          height: '12px',
-          backgroundColor: glowColor,
-          boxShadow: `0 0 20px 10px ${glowColor}${userData.is_online ? '80' : '40'}`,
-          transform: `scale(${pulse})`,
-          opacity: luminosity,
-        }}
-      />
-    </div>
-  )
-}
-
-function GoogleIcon() {
-  return (
-    <svg className="w-5 h-5" viewBox="0 0 24 24">
-      <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-      <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-      <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
-      <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
-    </svg>
+    <NightSky 
+      user={user} 
+      users={users} 
+      onSignOut={handleSignOut}
+      onResetPositions={resetAllPositions}
+    />
   )
 }
 
