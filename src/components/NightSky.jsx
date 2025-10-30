@@ -1,76 +1,43 @@
+// src/components/NightSky.jsx
 import React from 'react'
 import GlowingPixel from './GlowingPixel'
 
-function NightSky({ user, users, onSignOut, onResetPositions }) {
-  const onlineUsers = users.filter(u => u.is_online)
-
-  console.log('🌌 NightSky rendering - Total users:', users.length, 'Online:', onlineUsers.length)
-
+export default function NightSky({ user, users = [], setUsers, onSignOut, onResetPositions }) {
   return (
-    <div className="min-h-screen bg-night-sky relative overflow-hidden" style={{ height: '100vh', width: '100vw' }}>
-      {/* Background */}
-      <div className="absolute inset-0 bg-gradient-to-br from-blue-900/30 via-purple-900/20 to-black"></div>
-
-      {/* Background stars */}
-      <div className="absolute inset-0">
-        {Array.from({ length: 50 }).map((_, i) => (
-          <div
-            key={`bg-${i}`}
-            className="absolute bg-white rounded-full animate-twinkle"
-            style={{
-              width: '1px',
-              height: '1px',
-              left: Math.random() * 100 + '%',
-              top: Math.random() * 100 + '%',
-              animationDelay: Math.random() * 8 + 's',
-            }}
-          />
-        ))}
-      </div>
-
-      {/* User glowing pixels */}
-      {users.map((userData) => (
-        <GlowingPixel 
-          key={userData.user_id} 
-          userData={userData} 
-          isCurrentUser={userData.user_id === user.id}
-        />
-      ))}
-
-      {/* Controls - Simplified */}
-      <div className="absolute top-4 right-4 z-50">
-        <div className="bg-black/90 backdrop-blur-sm rounded-lg p-4 border border-white/20">
-          <div className="flex items-center gap-4">
-            <div className="text-white">
-              <p className="text-sm font-semibold truncate max-w-[120px]">{user.email}</p>
-              <p className="text-xs text-white/80 mt-1">
-                Online: <span className="text-green-400 font-bold">{onlineUsers.length}</span>
-              </p>
-              <p className="text-xs text-white/60 mt-1">
-                Total: {users.length}
-              </p>
-            </div>
-            <button
-              onClick={onSignOut}
-              className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-xs transition-colors"
-            >
-              Sign Out
-            </button>
-          </div>
+    <div className="w-full h-screen bg-night-sky relative overflow-hidden min-h-screen">
+      <header className="absolute top-4 left-4 right-4 flex justify-between items-center z-30">
+        <div className="text-white">Signed in as <strong>{user.email}</strong></div>
+        <div className="flex gap-3">
+          <button onClick={onResetPositions} className="px-3 py-2 rounded-md bg-white/10 text-white">Reset</button>
+          <button
+            onClick={onSignOut}
+            className="px-3 py-2 rounded-md font-semibold text-white bg-gradient-to-r from-red-600 to-pink-600 hover:scale-105 transform transition"
+          >
+            Sign Out
+          </button>
         </div>
-      </div>
+      </header>
 
-      {/* Reset button only */}
-      <div className="absolute bottom-4 left-4 z-50">
-        <button
-          onClick={onResetPositions}
-          className="bg-orange-600 hover:bg-orange-700 text-white px-3 py-2 rounded text-sm transition-colors"
-        >
-          Reset to Initial Positions
-        </button>
-      </div>
+            {users.map((u) => (
+            <GlowingPixel
+                key={u.id ?? u.email}
+                userData={u}
+                isCurrentUser={(u.email || '').toLowerCase() === (user.email || '').toLowerCase()}
+                onMove={(pos) => {
+                // update local state so next rpc sync sends latest coords
+                setUsers((prev) =>
+                    prev.map((p) =>
+                    (p.email || '').toLowerCase() === (u.email || '').toLowerCase()
+                        ? { ...p, current_x: pos.x, current_y: pos.y }
+                        : p
+                    )
+                )
+                }}
+            />
+            ))}
+
+
+      <div className="absolute bottom-4 left-4 text-white/60 z-30">Stars: {users.length}</div>
     </div>
   )
 }
-
-export default NightSky
