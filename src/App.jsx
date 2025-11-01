@@ -123,6 +123,58 @@ export default function App() {
     }
   }
 
+async function handleTwinkle() {
+  if (!user) return;
+  const email = (user.email || "").toLowerCase();
+
+  // 1️⃣ Set twinkle state to true locally and in DB
+  setUsers(prev =>
+    prev.map(u =>
+      (u.email || "").toLowerCase() === email
+        ? { ...u, is_twinkle: true, luminosity: 1.5 }
+        : u
+    )
+  );
+
+  try {
+    await supabase
+      .from("user_positions")
+      .update({
+        is_twinkle: true,
+        luminosity: 1.5,
+        last_seen: new Date().toISOString(),
+      })
+      .eq("email", email);
+  } catch (err) {
+    console.error("Error setting twinkle true:", err);
+  }
+
+  // 2️⃣ Wait 3 seconds, then turn off twinkle
+  setTimeout(async () => {
+    setUsers(prev =>
+      prev.map(u =>
+        (u.email || "").toLowerCase() === email
+          ? { ...u, is_twinkle: false, luminosity: 0.8 }
+          : u
+      )
+    );
+
+    try {
+      await supabase
+        .from("user_positions")
+        .update({
+          is_twinkle: false,
+          luminosity: 0.8,
+          last_seen: new Date().toISOString(),
+        })
+        .eq("email", email);
+    } catch (err2) {
+      console.error("Error reverting twinkle:", err2);
+    }
+  }, 3000);
+}
+
+
   // sign out sequence
   async function handleSignOut() {
     if (!user) return;
@@ -202,12 +254,17 @@ export default function App() {
   if (!user) return <AuthPage onSignIn={() => supabase.auth.signInWithOAuth({ provider: "google" })} />;
 
   return (
-    <NightSky
+      <NightSky
       user={user}
       users={users}
       setUsers={setUsers}
       onSignOut={handleSignOut}
-      onResetPositions={async () => { await supabase.rpc("reset_user_positions"); fetchAllUsers(); }}
+      onResetPositions={async () => {
+        await supabase.rpc("reset_user_positions");
+        fetchAllUsers();
+      }}
+      onTwinkle={handleTwinkle}
     />
+
   );
 }

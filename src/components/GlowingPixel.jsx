@@ -7,60 +7,74 @@ export default function GlowingPixel({ userData, isCurrentUser }) {
     y: userData.current_y ?? userData.initial_y ?? Math.random(),
   });
   const [lum, setLum] = useState(userData.luminosity ?? 0.8);
+  const [twinkle, setTwinkle] = useState(!!userData.is_twinkle);
 
-  // smoothly move when DB position changes
+  // Smooth position transitions when DB updates
   useEffect(() => {
-    const targetX = userData.current_x ?? userData.initial_x ?? pos.x;
-    const targetY = userData.current_y ?? userData.initial_y ?? pos.y;
+    if (userData.current_x == null || userData.current_y == null) return;
     const duration = 600;
     const startX = pos.x;
     const startY = pos.y;
+    const dx = userData.current_x - startX;
+    const dy = userData.current_y - startY;
     const start = performance.now();
-
     let raf;
-    const step = (now) => {
+    const animate = (now) => {
       const t = Math.min((now - start) / duration, 1);
       const ease = 1 - Math.pow(1 - t, 3);
-      setPos({ x: startX + (targetX - startX) * ease, y: startY + (targetY - startY) * ease });
-      if (t < 1) raf = requestAnimationFrame(step);
+      setPos({ x: startX + dx * ease, y: startY + dy * ease });
+      if (t < 1) raf = requestAnimationFrame(animate);
     };
-    raf = requestAnimationFrame(step);
+    raf = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(raf);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userData.current_x, userData.current_y]);
 
+  // React to luminosity and twinkle changes
   useEffect(() => {
-    if (userData.is_online) {
-      setLum(isCurrentUser ? 1 : 0.8);
-    } else {
-      setLum(0.18);
-    }
-  }, [userData.is_online, isCurrentUser]);
+    setLum(userData.luminosity ?? 0.8);
+    setTwinkle(!!userData.is_twinkle);
+  }, [userData.luminosity, userData.is_twinkle]);
 
   const size = isCurrentUser ? 20 : 14;
   const color = userData.is_online ? (isCurrentUser ? "#fff6a8" : "#ffffff") : "#ff6b6b";
 
+  const twinkleStyle = twinkle
+    ? { animation: "twinkle-pulse 0.3s ease-in-out infinite" }
+    : {};
+
   return (
-    <div
-      title={`${userData.email}\nX:${(pos.x * 100).toFixed(1)}% Y:${(pos.y * 100).toFixed(1)}%`}
-      style={{
-        position: "absolute",
-        left: `${pos.x * 100}%`,
-        top: `${pos.y * 100}%`,
-        transform: "translate(-50%,-50%)",
-        pointerEvents: "auto",
-        zIndex: isCurrentUser ? 40 : 10,
-      }}
-    >
-      <div style={{
-        width: size,
-        height: size,
-        borderRadius: 9999,
-        background: color,
-        boxShadow: `0 0 ${size * 2.5}px ${size / 2}px ${color}`,
-        opacity: lum,
-        transition: "opacity 0.4s ease, box-shadow 0.4s linear"
-      }} />
-    </div>
+    <>
+      <style>{`
+        @keyframes twinkle-pulse {
+          0% { transform: scale(1); filter: drop-shadow(0 0 ${size * 1.5}px ${color}); }
+          50% { transform: scale(1.2); filter: drop-shadow(0 0 ${size * 3.5}px ${color}); }
+          100% { transform: scale(1); filter: drop-shadow(0 0 ${size * 1.5}px ${color}); }
+        }
+      `}</style>
+
+      <div
+        title={`${userData.email}\nX:${(pos.x * 100).toFixed(1)}% Y:${(pos.y * 100).toFixed(1)}%`}
+        style={{
+          position: "absolute",
+          left: `${pos.x * 100}%`,
+          top: `${pos.y * 100}%`,
+          transform: "translate(-50%,-50%)",
+          zIndex: isCurrentUser ? 40 : 10,
+        }}
+      >
+        <div
+          style={{
+            width: size,
+            height: size,
+            borderRadius: "50%",
+            background: color,
+            boxShadow: `0 0 ${size * 2.5}px ${size / 2}px ${color}`,
+            opacity: Math.max(0.05, Math.min(1.5, lum)),
+            transition: twinkle ? "none" : "opacity 0.4s ease, box-shadow 0.4s linear",
+            ...twinkleStyle,
+          }}
+        />
+      </div>
+    </>
   );
 }
