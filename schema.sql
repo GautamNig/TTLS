@@ -12,17 +12,20 @@ DROP FUNCTION IF EXISTS reset_user_positions CASCADE;
 CREATE TABLE user_positions (
   id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
   user_id UUID NOT NULL,
-  email CITEXT NOT NULL UNIQUE,
-  initial_x FLOAT NOT NULL DEFAULT random(),
-  initial_y FLOAT NOT NULL DEFAULT random(),
+  email CITEXT NOT NULL,
+  initial_x FLOAT NOT NULL DEFAULT 0.5,
+  initial_y FLOAT NOT NULL DEFAULT 0.5,
   current_x FLOAT NOT NULL DEFAULT 0.5,
   current_y FLOAT NOT NULL DEFAULT 0.5,
-  luminosity FLOAT NOT NULL DEFAULT 0.8,
-  is_online BOOLEAN NOT NULL DEFAULT true,
+  luminosity FLOAT NOT NULL DEFAULT 0.5,
+  is_twinkle BOOLEAN DEFAULT false, -- <== add this line
+  is_online BOOLEAN DEFAULT true,
   last_seen TIMESTAMPTZ DEFAULT NOW(),
   created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
-  updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+  updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+  UNIQUE(email)
 );
+
 
 ALTER TABLE user_positions ENABLE ROW LEVEL SECURITY;
 

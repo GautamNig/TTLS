@@ -7,7 +7,6 @@ export default function NightSky({ user, users = [], setUsers, onSignOut, onRese
     <div className="w-full h-screen bg-night-sky relative overflow-hidden min-h-screen">
       <header className="absolute top-4 left-4 right-4 flex justify-between items-center z-30">
         <div className="text-white text-sm">Signed in as <strong>{user.email}</strong></div>
-// inside src/components/NightSky.jsx header buttons area
 <div className="flex gap-3 items-center">
   <button
     onClick={onResetPositions}
