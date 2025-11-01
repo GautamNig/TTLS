@@ -1,78 +1,66 @@
-import React, { useEffect, useRef, useState } from 'react'
+// src/components/GlowingPixel.jsx
+import React, { useEffect, useState } from "react";
 
-export default function GlowingPixel({ userData, isCurrentUser, onMove }) {
+export default function GlowingPixel({ userData, isCurrentUser }) {
   const [pos, setPos] = useState({
     x: userData.current_x ?? userData.initial_x ?? Math.random(),
     y: userData.current_y ?? userData.initial_y ?? Math.random(),
-  })
-  const [luminosity, setLuminosity] = useState(userData.luminosity ?? 0.8)
+  });
+  const [lum, setLum] = useState(userData.luminosity ?? 0.8);
 
-  const velocity = useRef({
-    dx: (Math.random() - 0.5) * 0.00002, // ≈0.05 px/s
-    dy: (Math.random() - 0.5) * 0.00002,
-  })
+  // smoothly move when DB position changes
+  useEffect(() => {
+    const targetX = userData.current_x ?? userData.initial_x ?? pos.x;
+    const targetY = userData.current_y ?? userData.initial_y ?? pos.y;
+    const duration = 600;
+    const startX = pos.x;
+    const startY = pos.y;
+    const start = performance.now();
+
+    let raf;
+    const step = (now) => {
+      const t = Math.min((now - start) / duration, 1);
+      const ease = 1 - Math.pow(1 - t, 3);
+      setPos({ x: startX + (targetX - startX) * ease, y: startY + (targetY - startY) * ease });
+      if (t < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userData.current_x, userData.current_y]);
 
   useEffect(() => {
-    let last = performance.now()
-    const animate = (t) => {
-      const dt = (t - last) / 1000
-      last = t
-
-      setPos((p) => {
-        let { x, y } = p
-        x += velocity.current.dx * dt * 60
-        y += velocity.current.dy * dt * 60
-        if (x < 0 || x > 1) velocity.current.dx *= -1
-        if (y < 0 || y > 1) velocity.current.dy *= -1
-        x = Math.max(0, Math.min(1, x))
-        y = Math.max(0, Math.min(1, y))
-        const newPos = { x, y }
-        if (isCurrentUser && onMove) onMove(newPos)
-        return newPos
-      })
-
-      requestAnimationFrame(animate)
+    if (userData.is_online) {
+      setLum(isCurrentUser ? 1 : 0.8);
+    } else {
+      setLum(0.18);
     }
-    requestAnimationFrame(animate)
-  }, [isCurrentUser, onMove])
+  }, [userData.is_online, isCurrentUser]);
 
-  useEffect(() => {
-    if (isCurrentUser && userData.is_online) {
-      setLuminosity(1)
-      const t = setTimeout(() => setLuminosity(0.8), 1500)
-      return () => clearTimeout(t)
-    }
-    setLuminosity(userData.is_online ? 0.8 : 0.2)
-  }, [userData.is_online, isCurrentUser])
-
-  const x = pos.x * 100
-  const y = pos.y * 100
-  const size = isCurrentUser ? 20 : 14
-  const glow = userData.is_online
-    ? isCurrentUser
-      ? '#fff6a8'
-      : '#ffffff'
-    : '#ff6b6b'
+  const size = isCurrentUser ? 20 : 14;
+  const color = userData.is_online ? (isCurrentUser ? "#fff6a8" : "#ffffff") : "#ff6b6b";
 
   return (
     <div
+      title={`${userData.email}\nX:${(pos.x * 100).toFixed(1)}% Y:${(pos.y * 100).toFixed(1)}%`}
       style={{
-        position: 'absolute',
-        left: `${x}%`,
-        top: `${y}%`,
-        transform: 'translate(-50%, -50%)',
+        position: "absolute",
+        left: `${pos.x * 100}%`,
+        top: `${pos.y * 100}%`,
+        transform: "translate(-50%,-50%)",
+        pointerEvents: "auto",
+        zIndex: isCurrentUser ? 40 : 10,
       }}
     >
-      <div
-        style={{
-          width: size,
-          height: size,
-          borderRadius: '9999px',
-          background: glow,
-          boxShadow: `0 0 ${size * 2.5}px ${size / 2}px ${glow}`,
-          opacity: luminosity,
-        }}
-      />
+      <div style={{
+        width: size,
+        height: size,
+        borderRadius: 9999,
+        background: color,
+        boxShadow: `0 0 ${size * 2.5}px ${size / 2}px ${color}`,
+        opacity: lum,
+        transition: "opacity 0.4s ease, box-shadow 0.4s linear"
+      }} />
     </div>
-  )
+  );
 }

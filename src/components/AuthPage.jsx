@@ -1,5 +1,6 @@
 // src/components/AuthPage.jsx
-import React from 'react'
+import React from "react";
+import GoogleIcon from "./GoogleIcon";
 
 export default function AuthPage({ onSignIn }) {
   return (
@@ -7,8 +8,11 @@ export default function AuthPage({ onSignIn }) {
       <div className="bg-black/70 p-8 rounded-md text-center text-white">
         <h1 className="text-2xl mb-2">✨ TTLS</h1>
         <p className="mb-4">Join the Night Sky</p>
-        <button onClick={onSignIn} className="px-4 py-2 rounded-md bg-white text-gray-800 font-semibold">Sign in with Google</button>
+        <button onClick={onSignIn} className="px-4 py-2 rounded-md bg-white text-gray-800 font-semibold flex items-center gap-2">
+          <GoogleIcon />
+          Sign in with Google
+        </button>
       </div>
     </div>
-  )
+  );
 }
