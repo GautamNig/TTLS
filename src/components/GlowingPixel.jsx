@@ -9,10 +9,10 @@ export default function GlowingPixel({ userData, isCurrentUser }) {
   const [lum, setLum] = useState(userData.luminosity ?? 0.8);
   const [twinkle, setTwinkle] = useState(!!userData.is_twinkle);
 
-  // Smooth position transitions when DB updates
+  // Smooth position animation
   useEffect(() => {
     if (userData.current_x == null || userData.current_y == null) return;
-    const duration = 600;
+    const duration = 500;
     const startX = pos.x;
     const startY = pos.y;
     const dx = userData.current_x - startX;
@@ -29,51 +29,66 @@ export default function GlowingPixel({ userData, isCurrentUser }) {
     return () => cancelAnimationFrame(raf);
   }, [userData.current_x, userData.current_y]);
 
-  // React to luminosity and twinkle changes
+  // Handle luminosity and twinkle state
   useEffect(() => {
     setLum(userData.luminosity ?? 0.8);
     setTwinkle(!!userData.is_twinkle);
   }, [userData.luminosity, userData.is_twinkle]);
 
-  const size = isCurrentUser ? 20 : 14;
-  const color = userData.is_online ? (isCurrentUser ? "#fff6a8" : "#ffffff") : "#ff6b6b";
+  const baseColor = userData.is_online
+    ? isCurrentUser
+      ? "#ffe97a" // yellow for current user
+      : "#ffffff" // white for others
+    : "#ff6b6b"; // red for offline users
 
-  const twinkleStyle = twinkle
-    ? { animation: "twinkle-pulse 0.3s ease-in-out infinite" }
-    : {};
+  const size = isCurrentUser ? 30 : 22;
 
   return (
     <>
       <style>{`
-        @keyframes twinkle-pulse {
-          0% { transform: scale(1); filter: drop-shadow(0 0 ${size * 1.5}px ${color}); }
-          50% { transform: scale(1.2); filter: drop-shadow(0 0 ${size * 3.5}px ${color}); }
-          100% { transform: scale(1); filter: drop-shadow(0 0 ${size * 1.5}px ${color}); }
+        @keyframes twinklePulse {
+          0%, 100% { transform: scale(1); opacity: 1; text-shadow: 0 0 8px ${baseColor}, 0 0 16px ${baseColor}; }
+          50% { transform: scale(1.2); opacity: 0.7; text-shadow: 0 0 16px ${baseColor}, 0 0 32px ${baseColor}; }
+        }
+        @keyframes slowGlow {
+          0%, 100% { text-shadow: 0 0 6px ${baseColor}, 0 0 12px ${baseColor}; }
+          50% { text-shadow: 0 0 14px ${baseColor}, 0 0 28px ${baseColor}; }
         }
       `}</style>
 
       <div
-        title={`${userData.email}\nX:${(pos.x * 100).toFixed(1)}% Y:${(pos.y * 100).toFixed(1)}%`}
+        title={`${userData.email}\nX:${(pos.x * 100).toFixed(1)}% Y:${(
+          pos.y * 100
+        ).toFixed(1)}%`}
         style={{
           position: "absolute",
           left: `${pos.x * 100}%`,
           top: `${pos.y * 100}%`,
-          transform: "translate(-50%,-50%)",
-          zIndex: isCurrentUser ? 40 : 10,
+          transform: "translate(-50%, -50%)",
+          transition: "opacity 0.5s ease-in-out",
+          opacity: lum,
+          zIndex: isCurrentUser ? 50 : 10,
         }}
       >
         <div
           style={{
-            width: size,
-            height: size,
-            borderRadius: "50%",
-            background: color,
-            boxShadow: `0 0 ${size * 2.5}px ${size / 2}px ${color}`,
-            opacity: Math.max(0.05, Math.min(1.5, lum)),
-            transition: twinkle ? "none" : "opacity 0.4s ease, box-shadow 0.4s linear",
-            ...twinkleStyle,
+            fontSize: `${size}px`,
+            color: baseColor,
+            textShadow: `0 0 8px ${baseColor}, 0 0 20px ${baseColor}`,
+            animation: twinkle
+              ? "twinklePulse 0.4s ease-in-out infinite"
+              : "slowGlow 3s ease-in-out infinite",
+            userSelect: "none",
+            pointerEvents: "none",
           }}
-        />
+        >
+          ★
+        </div>
+        {isCurrentUser && (
+          <div className="absolute top-full left-1/2 transform -translate-x-1/2 mt-1 text-xs text-white bg-black/40 px-1 rounded whitespace-nowrap">
+            You
+          </div>
+        )}
       </div>
     </>
   );
