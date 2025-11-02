@@ -1,0 +1,1 @@
+:root{--bg1: #0a0a2a;--bg2: #000010}html,body,#root{height:100%;margin:0;padding:0}body{font-family:Inter,system-ui,sans-serif;background:radial-gradient(circle at 30% 30%,var(--bg1),var(--bg2) 90%);color:#fff}.bg-night-sky{background:radial-gradient(circle at 30% 30%,var(--bg1),var(--bg2) 90%)}
