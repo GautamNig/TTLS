@@ -5,29 +5,17 @@ import AuthPage from "./components/AuthPage";
 import NightSky from "./components/NightSky";
 import "./index.css";
 
-/*
- Behavior:
- - single supabase client handles auth + realtime
- - service client used only for mark_user_offline_by_email (reliable)
- - current user writes its position every 500ms via update_user_position RPC
- - realtime subscription updates all clients instantly
- - signout flow:
-    1) optimistic local dim
-    2) call service RPC to mark offline
-    3) remove realtime channels
-    4) signOut()
-*/
-
 export default function App() {
   const [user, setUser] = useState(null);
   const [users, setUsers] = useState([]);
+  const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(true);
   const isSigningOutRef = useRef(false);
-
-  // drift directions per user (client only)
   const driftRef = useRef({});
+  // Add this ref with your other refs
+  const hasSentJoinMessageRef = useRef(false);
 
-  // initial session + auth listener
+  // Initial session + auth listener
   useEffect(() => {
     (async () => {
       const { data } = await supabase.auth.getSession();
@@ -46,14 +34,14 @@ export default function App() {
       } else if (event === "SIGNED_OUT") {
         setUser(null);
         setUsers([]);
+        setMessages([]);
       }
     });
 
     return () => sub.subscription.unsubscribe();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // realtime subscription (single channel) - always present after app loads
+  // Realtime subscription for user positions
   useEffect(() => {
     const channel = supabase
       .channel("user_positions_changes")
@@ -83,10 +71,95 @@ export default function App() {
     };
   }, []);
 
-  // initial fetch
+  // Realtime subscription for chat messages
+  useEffect(() => {
+    if (!user) return;
+
+    const chatChannel = supabase
+      .channel('chat_messages')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'chat_messages'
+        },
+        (payload) => {
+          const newMessage = payload.new;
+          // Only show messages from the last 5 minutes
+          const messageTime = new Date(newMessage.created_at);
+          const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+
+          if (messageTime > fiveMinutesAgo) {
+            setMessages(prev => [...prev, newMessage]);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(chatChannel);
+    };
+  }, [user]);
+
+  // Initial fetch of users
   useEffect(() => {
     fetchAllUsers();
   }, []);
+
+  // Add this useEffect to reset the flag when user signs out
+  useEffect(() => {
+    if (!user) {
+      hasSentJoinMessageRef.current = false;
+    }
+  }, [user]);
+
+  // Add this visibility change handler to prevent join messages on tab switch
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && user) {
+        // When tab becomes visible, just update last_seen but don't send join message
+        (async () => {
+          try {
+            const email = (user.email || "").toLowerCase();
+            await supabase
+              .from("user_positions")
+              .update({
+                last_seen: new Date().toISOString(),
+              })
+              .eq("email", email);
+          } catch (error) {
+            console.error("Error updating last_seen:", error);
+          }
+        })();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [user]);
+
+  // Auto-clean old messages every 5 minutes
+  useEffect(() => {
+    if (!user) return;
+
+    const cleanupInterval = setInterval(async () => {
+      try {
+        const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+        await supabase
+          .from('chat_messages')
+          .delete()
+          .lt('created_at', oneHourAgo);
+      } catch (error) {
+        console.error('Error cleaning old messages:', error);
+      }
+    }, 5 * 60 * 1000);
+
+    return () => clearInterval(cleanupInterval);
+  }, [user]);
 
   async function fetchAllUsers() {
     try {
@@ -98,6 +171,24 @@ export default function App() {
     }
   }
 
+  // System message function
+  const sendSystemMessage = async (content, type = 'info') => {
+    try {
+      await supabase
+        .from('chat_messages')
+        .insert({
+          sender_email: 'system',
+          sender_id: '00000000-0000-0000-0000-000000000000',
+          content: content,
+          type: type,
+          created_at: new Date().toISOString()
+        });
+    } catch (error) {
+      console.error('Error sending system message:', error);
+    }
+  };
+
+  // Update the markUserOnline function to check for duplicates
   async function markUserOnline(authUser) {
     try {
       const email = (authUser.email || "").toLowerCase();
@@ -107,54 +198,56 @@ export default function App() {
       });
       if (error) throw error;
       await fetchAllUsers();
+
+      // Only send join message if we haven't sent one recently
+      if (!hasSentJoinMessageRef.current) {
+        await sendSystemMessage(`${authUser.email} joined the chat`, 'join');
+        hasSentJoinMessageRef.current = true;
+      }
     } catch (e) {
       console.error("markUserOnline error", e);
     }
   }
 
-  // reliable offline call, uses service key (runs regardless of auth token)
+  // Reliable offline call
   async function markUserOfflineViaService(email) {
     try {
       await supabaseService.rpc("mark_user_offline_by_email", { user_email: email });
-      // also fetch to refresh local state (realtime should broadcast)
       await fetchAllUsers();
     } catch (e) {
       console.error("markUserOfflineViaService error", e);
     }
   }
 
-async function handleTwinkle() {
-  if (!user) return;
-  const email = (user.email || "").toLowerCase();
+  // Handle sending chat messages
+  const handleSendMessage = async (content) => {
+    if (!user || !content.trim()) return;
 
-  // 1️⃣ Set twinkle state to true locally and in DB
-  setUsers(prev =>
-    prev.map(u =>
-      (u.email || "").toLowerCase() === email
-        ? { ...u, is_twinkle: true, luminosity: 1.5 }
-        : u
-    )
-  );
+    try {
+      await supabase
+        .from('chat_messages')
+        .insert({
+          sender_email: user.email,
+          sender_id: user.id,
+          content: content.trim(),
+          type: 'user',
+          created_at: new Date().toISOString()
+        });
+    } catch (error) {
+      console.error('Error sending message:', error);
+    }
+  };
 
-  try {
-    await supabase
-      .from("user_positions")
-      .update({
-        is_twinkle: true,
-        luminosity: 1.5,
-        last_seen: new Date().toISOString(),
-      })
-      .eq("email", email);
-  } catch (err) {
-    console.error("Error setting twinkle true:", err);
-  }
+  // Twinkle function
+  async function handleTwinkle() {
+    if (!user) return;
+    const email = (user.email || "").toLowerCase();
 
-  // 2️⃣ Wait 3 seconds, then turn off twinkle
-  setTimeout(async () => {
+    // Set twinkle state locally and in DB
     setUsers(prev =>
       prev.map(u =>
         (u.email || "").toLowerCase() === email
-          ? { ...u, is_twinkle: false, luminosity: 0.8 }
+          ? { ...u, is_twinkle: true, luminosity: 1.5 }
           : u
       )
     );
@@ -163,33 +256,58 @@ async function handleTwinkle() {
       await supabase
         .from("user_positions")
         .update({
-          is_twinkle: false,
-          luminosity: 0.8,
+          is_twinkle: true,
+          luminosity: 1.5,
           last_seen: new Date().toISOString(),
         })
         .eq("email", email);
-    } catch (err2) {
-      console.error("Error reverting twinkle:", err2);
+    } catch (err) {
+      console.error("Error setting twinkle true:", err);
     }
-  }, 3000);
-}
 
+    // Revert after 3 seconds
+    setTimeout(async () => {
+      setUsers(prev =>
+        prev.map(u =>
+          (u.email || "").toLowerCase() === email
+            ? { ...u, is_twinkle: false, luminosity: 0.8 }
+            : u
+        )
+      );
 
-  // sign out sequence
+      try {
+        await supabase
+          .from("user_positions")
+          .update({
+            is_twinkle: false,
+            luminosity: 0.8,
+            last_seen: new Date().toISOString(),
+          })
+          .eq("email", email);
+      } catch (err2) {
+        console.error("Error reverting twinkle:", err2);
+      }
+    }, 3000);
+  }
+
+  // Sign out sequence
   async function handleSignOut() {
     if (!user) return;
     const email = (user.email || "").toLowerCase();
     if (isSigningOutRef.current) return;
     isSigningOutRef.current = true;
 
-    // optimistic local update -> dim & mark offline locally
+    // Send leave message BEFORE signing out
+    await sendSystemMessage(`${user.email} left the chat`, 'leave');
+
+    // Optimistic local update
     setUsers((prev) => prev.map((u) => ((u.email || "").toLowerCase() === email ? { ...u, is_online: false, luminosity: 0.1 } : u)));
 
     try {
-      // 1) server-side mark offline via service role (reliable)
+      // 1) server-side mark offline via service role
       await markUserOfflineViaService(email);
 
-      // 2) remove realtime channels to avoid reconnect race
+      // 2) remove realtime channels
       try { await supabase.removeAllChannels(); } catch (e) { console.warn("removeAllChannels failed", e); }
 
       // 3) sign out
@@ -206,12 +324,12 @@ async function handleTwinkle() {
     }
   }
 
-  // movement: current logged-in client updates its own position to DB every 500ms
+  // Movement: current user updates position every 500ms
   useEffect(() => {
     if (!user) return;
     const email = (user.email || "").toLowerCase();
 
-    // create drift vector if not present (client-side deterministic random for velocity)
+    // Create drift vector if not present
     if (!driftRef.current[email]) {
       driftRef.current[email] = {
         dx: (Math.random() - 0.5) * 0.01,
@@ -225,13 +343,13 @@ async function handleTwinkle() {
           if ((u.email || "").toLowerCase() !== email || !u.is_online) return u;
           let nx = (u.current_x ?? u.initial_x ?? 0.5) + driftRef.current[email].dx;
           let ny = (u.current_y ?? u.initial_y ?? 0.5) + driftRef.current[email].dy;
-          // wrap around
+          // Wrap around
           if (nx > 1) nx = 0;
           if (nx < 0) nx = 1;
           if (ny > 1) ny = 0;
           if (ny < 0) ny = 1;
 
-          // write to DB (async, fire-and-forget but errors logged)
+          // Write to DB
           (async () => {
             try {
               const { error } = await supabase.rpc("update_user_position", { p_email: email, p_x: nx, p_y: ny });
@@ -244,7 +362,7 @@ async function handleTwinkle() {
           return { ...u, current_x: nx, current_y: ny };
         });
       });
-    }, 500); // every 500ms
+    }, 500);
 
     return () => clearInterval(id);
   }, [user]);
@@ -254,13 +372,16 @@ async function handleTwinkle() {
   if (!user) return <AuthPage onSignIn={() => supabase.auth.signInWithOAuth({ provider: "google" })} />;
 
   return (
+    <div className="fixed inset-0 w-screen h-screen overflow-hidden">
       <NightSky
-      user={user}
-      users={users}
-      setUsers={setUsers}
-      onSignOut={handleSignOut}
-      onTwinkle={handleTwinkle}
-    />
-
+        user={user}
+        users={users}
+        setUsers={setUsers}
+        onSignOut={handleSignOut}
+        onTwinkle={handleTwinkle}
+        messages={messages}
+        onSendMessage={handleSendMessage}
+      />
+    </div>
   );
 }
