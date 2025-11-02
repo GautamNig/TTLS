@@ -214,8 +214,8 @@ async function handleTwinkle() {
     // create drift vector if not present (client-side deterministic random for velocity)
     if (!driftRef.current[email]) {
       driftRef.current[email] = {
-        dx: (Math.random() - 0.5) * 0.002, // tuned small
-        dy: (Math.random() - 0.5) * 0.002,
+        dx: (Math.random() - 0.5) * 0.01,
+        dy: (Math.random() - 0.5) * 0.01,
       };
     }
 
