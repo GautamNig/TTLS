@@ -1,31 +1,17 @@
 // src/components/NightSky.jsx
 import React from "react";
+import ModernHeader from "./ModernHeader";
 import GlowingPixel from "./GlowingPixel";
 
 export default function NightSky({ user, users = [], setUsers, onSignOut, onTwinkle }) {
   return (
-    <div className="w-full h-screen bg-night-sky relative overflow-hidden min-h-screen">
-      <header className="absolute top-4 left-4 right-4 flex justify-between items-center z-30">
-        <div className="text-white text-sm">Signed in as <strong>{user.email}</strong></div>
-<div className="flex gap-3 items-center">
-  <button
-    onClick={onTwinkle}
-    className="px-3 py-2 rounded-md font-semibold text-gray-900 bg-yellow-300 hover:scale-105 transform transition"
-    title="Make your star twinkle for 3 seconds"
-  >
-    Twinkle
-  </button>
+    <div className="w-full h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 relative overflow-hidden min-h-screen">
+      {/* Animated background stars */}
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-blue-500/10 via-transparent to-transparent"></div>
+      
+      <ModernHeader user={user} onSignOut={onSignOut} onTwinkle={onTwinkle} />
 
-  <button
-    onClick={onSignOut}
-    className="px-3 py-2 rounded-md font-semibold text-white bg-gradient-to-r from-red-600 to-pink-600 hover:scale-105 transform transition"
-  >
-    Sign Out
-  </button>
-</div>
-
-      </header>
-
+      {/* Stars container */}
       {users.map((u) => (
         <GlowingPixel
           key={u.id || u.email}
@@ -34,7 +20,13 @@ export default function NightSky({ user, users = [], setUsers, onSignOut, onTwin
         />
       ))}
 
-      <div className="absolute bottom-4 left-4 text-white/60 z-30">Stars: {users.length}</div>
+      {/* Modern counter */}
+      <div className="absolute bottom-6 left-6 bg-black/40 backdrop-blur-lg border border-white/10 rounded-2xl px-6 py-3 shadow-2xl">
+        <div className="text-white/80 text-sm">Live Stars</div>
+        <div className="text-white font-bold text-xl bg-gradient-to-r from-cyan-400 to-purple-400 bg-clip-text text-transparent">
+          {users.length} ✨
+        </div>
+      </div>
     </div>
   );
 }
