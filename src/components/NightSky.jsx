@@ -2,19 +2,12 @@
 import React from "react";
 import GlowingPixel from "./GlowingPixel";
 
-export default function NightSky({ user, users = [], setUsers, onSignOut, onResetPositions, onTwinkle }) {
+export default function NightSky({ user, users = [], setUsers, onSignOut, onTwinkle }) {
   return (
     <div className="w-full h-screen bg-night-sky relative overflow-hidden min-h-screen">
       <header className="absolute top-4 left-4 right-4 flex justify-between items-center z-30">
         <div className="text-white text-sm">Signed in as <strong>{user.email}</strong></div>
 <div className="flex gap-3 items-center">
-  <button
-    onClick={onResetPositions}
-    className="px-3 py-2 rounded-md bg-white/10 text-white"
-  >
-    Reset
-  </button>
-
   <button
     onClick={onTwinkle}
     className="px-3 py-2 rounded-md font-semibold text-gray-900 bg-yellow-300 hover:scale-105 transform transition"

@@ -259,10 +259,6 @@ async function handleTwinkle() {
       users={users}
       setUsers={setUsers}
       onSignOut={handleSignOut}
-      onResetPositions={async () => {
-        await supabase.rpc("reset_user_positions");
-        fetchAllUsers();
-      }}
       onTwinkle={handleTwinkle}
     />
 
