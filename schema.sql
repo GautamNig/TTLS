@@ -133,6 +133,67 @@ CREATE POLICY "Allow insert for all users" ON chat_messages
 CREATE POLICY "Allow read for all users" ON chat_messages
     FOR SELECT USING (true);
 
+-- Add this to your existing schema.sql
+-- Private messages table
+-- Recreate the table with all policies
+CREATE TABLE private_messages (
+    id BIGSERIAL PRIMARY KEY,
+    sender_id UUID NOT NULL REFERENCES user_positions(user_id) ON DELETE CASCADE,
+    receiver_id UUID NOT NULL REFERENCES user_positions(user_id) ON DELETE CASCADE,
+    content TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
+    is_read BOOLEAN DEFAULT false
+);
+
+-- Enable realtime
+ALTER PUBLICATION supabase_realtime ADD TABLE private_messages;
+
+-- Indexes for performance
+CREATE INDEX idx_private_messages_sender_receiver ON private_messages(sender_id, receiver_id);
+CREATE INDEX idx_private_messages_receiver_sender ON private_messages(receiver_id, sender_id);
+CREATE INDEX idx_private_messages_created_at ON private_messages(created_at DESC);
+
+-- RLS Policies for private messages
+ALTER TABLE private_messages ENABLE ROW LEVEL SECURITY;
+
+-- UPDATE: Users can update messages they received (mark as read)
+CREATE POLICY "Users can update their received messages" ON private_messages
+    FOR UPDATE USING (auth.uid() = receiver_id);
+
+CREATE POLICY "Users can view their private messages" ON private_messages
+    FOR SELECT USING (auth.uid() = sender_id OR auth.uid() = receiver_id);
+
+CREATE POLICY "Users can send private messages" ON private_messages
+    FOR INSERT WITH CHECK (auth.uid() = sender_id);
+
+-- Replace the get_mutual_friends function with this corrected version
+CREATE OR REPLACE FUNCTION get_mutual_friends(user_uuid UUID)
+RETURNS TABLE (
+    friend_id UUID,
+    friend_email TEXT,
+    is_online BOOLEAN
+) 
+LANGUAGE sql
+AS $$
+    SELECT DISTINCT
+        CASE 
+            WHEN uf1.follower_id = user_uuid THEN uf1.followee_id 
+            ELSE uf1.follower_id 
+        END as friend_id,
+        up.email as friend_email,
+        up.is_online
+    FROM user_follows uf1
+    JOIN user_follows uf2 ON 
+        (uf1.follower_id = uf2.followee_id AND uf1.followee_id = uf2.follower_id)
+    JOIN user_positions up ON 
+        (CASE 
+            WHEN uf1.follower_id = user_uuid THEN uf1.followee_id 
+            ELSE uf1.follower_id 
+        END) = up.user_id
+    WHERE (uf1.follower_id = user_uuid OR uf1.followee_id = user_uuid)
+    AND uf1.follower_id != uf1.followee_id;
+$$;
+
 -- Functions for user management
 CREATE OR REPLACE FUNCTION get_or_create_user_position(p_user_id UUID, p_email TEXT)
 RETURNS SETOF user_positions
@@ -196,7 +257,28 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Update the function to handle edge cases better
+-- Update the function to handle edge cases better
+CREATE OR REPLACE FUNCTION mark_private_messages_as_read(
+    p_user_id UUID,
+    p_friend_id UUID
+)
+RETURNS TABLE (updated_count INTEGER)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    affected_rows INTEGER;
+BEGIN
+    UPDATE private_messages 
+    SET is_read = true
+    WHERE receiver_id = p_user_id 
+    AND sender_id = p_friend_id
+    AND is_read = false;
+    
+    GET DIAGNOSTICS affected_rows = ROW_COUNT;
+    RETURN QUERY SELECT affected_rows;
+END;
+$$;
 
-
--- Create a cron job to clean offline users (optional - run manually or set up pg_cron)
--- SELECT cron.schedule('clean-offline-users', '*/5 * * * *', 'SELECT clean_offline_users()');
+-- Grant execute permission
+GRANT EXECUTE ON FUNCTION mark_private_messages_as_read(UUID, UUID) TO anon, authenticated;

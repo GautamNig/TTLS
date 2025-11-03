@@ -7,7 +7,6 @@ export default function ModernHeader({ user, onSignOut, onTwinkle }) {
     <header className="absolute top-6 left-6 right-6 flex justify-between items-center z-30">
       {/* User Info */}
       <div className="bg-gradient-to-br from-purple-500/20 to-pink-500/20 backdrop-blur-lg border border-white/10 rounded-2xl px-6 py-3 shadow-2xl">
-        <div className="text-white/80 text-sm">Signed in as</div>
         <div className="text-white font-bold bg-gradient-to-r from-cyan-400 to-blue-400 bg-clip-text text-transparent">
           {user.email}
         </div>

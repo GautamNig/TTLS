@@ -32,7 +32,7 @@ export default function NightSky({
     }} className="bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
 
       {/* LEFT SIDE - Starfield */}
-      <div style={{ position: 'relative', overflow: 'hidden' }}>
+      <div style={{ position: 'relative', overflow: 'hidden', paddingTop: '34px'}} className="flex-1" >
         {/* Background effects */}
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-blue-500/10 via-transparent to-transparent" />
 

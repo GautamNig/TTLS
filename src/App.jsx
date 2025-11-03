@@ -228,41 +228,59 @@ export default function App() {
 
   // Fetch mutual friends
   async function fetchFriends() {
-    if (!user) return;
-    try {
-      const { data, error } = await supabase.rpc('get_mutual_friends', { user_uuid: user.id });
-      if (error) throw error;
-      setFriends(data || []);
-      
-      // Fetch existing private messages for each friend
+  if (!user) return;
+  console.log('🔄 fetchFriends called for user:', user.id, user.email);
+  
+  try {
+    const { data, error } = await supabase.rpc('get_mutual_friends', { user_uuid: user.id });
+    
+    if (error) {
+      console.error('❌ fetchFriends RPC error:', error);
+      throw error;
+    }
+    
+    console.log('✅ fetchFriends result:', {
+      user: user.id,
+      friendsCount: data?.length || 0,
+      friends: data
+    });
+    
+    setFriends(data || []);
+    
+    // Fetch existing private messages for each friend
+    if (data && data.length > 0) {
       data.forEach(friend => {
+        console.log('📨 Fetching private messages for friend:', friend.friend_id);
         fetchPrivateMessages(friend.friend_id);
       });
-    } catch (err) {
-      console.error("fetchFriends error:", err);
+    } else {
+      console.log('ℹ️ No friends found for user');
     }
+    
+  } catch (err) {
+    console.error("fetchFriends error:", err);
   }
+}
 
-  // Fetch private messages for a specific friend
   async function fetchPrivateMessages(friendId) {
-    if (!user) return;
-    try {
-      const { data, error } = await supabase
-        .from('private_messages')
-        .select('*')
-        .or(`and(sender_id.eq.${user.id},receiver_id.eq.${friendId}),and(sender_id.eq.${friendId},receiver_id.eq.${user.id})`)
-        .order('created_at', { ascending: true });
+  if (!user) return;
+  try {
+    const { data, error } = await supabase
+      .from('private_messages')
+      .select('*')
+      .or(`and(sender_id.eq.${user.id},receiver_id.eq.${friendId}),and(sender_id.eq.${friendId},receiver_id.eq.${user.id})`)
+      .order('created_at', { ascending: true });
 
-      if (error) throw error;
-      
-      setPrivateMessages(prev => ({
-        ...prev,
-        [friendId]: data || []
-      }));
-    } catch (err) {
-      console.error("fetchPrivateMessages error:", err);
-    }
+    if (error) throw error;
+    
+    setPrivateMessages(prev => ({
+      ...prev,
+      [friendId]: data || []
+    }));
+  } catch (err) {
+    console.error("fetchPrivateMessages error:", err);
   }
+}
 
   // System message function
   const sendSystemMessage = async (content, type = 'info') => {
@@ -480,14 +498,20 @@ const markPrivateMessagesAsRead = async (friendId) => {
   if (!user) return;
   
   try {
-    const { data, error } = await supabase.rpc('mark_private_messages_as_read', {
-      p_user_id: user.id,
-      p_friend_id: friendId
-    });
-    
+    const { data, error } = await supabase
+      .from('private_messages')
+      .update({ is_read: true })
+      .eq('receiver_id', user.id)
+      .eq('sender_id', friendId)
+      .eq('is_read', false)
+      .select();
+
     if (error) throw error;
     
-    console.log(`Marked ${data?.[0]?.updated_count || 0} messages as read for friend ${friendId}`);
+    console.log(`✅ Marked ${data?.length || 0} messages as read for friend ${friendId}`);
+    
+    // Refetch private messages to update UI
+    await fetchPrivateMessages(friendId);
     
   } catch (err) {
     console.error('Error marking messages as read:', err);
