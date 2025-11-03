@@ -8,12 +8,14 @@ export default function NightSky({
   user,
   users = [],
   setUsers,
+  followingList = [],
   onSignOut,
   onTwinkle,
   messages = [],
   onSendMessage = null,
   handleFollow,
   recentFriendships = [],
+  
 }) {
 
   return (
@@ -42,6 +44,7 @@ export default function NightSky({
             isCurrentUser={(u.email || "").toLowerCase() === (user.email || "").toLowerCase()}
             onFollow={(targetId) => handleFollow(targetId)}
             recentFriendships={recentFriendships}
+            isFollowing={followingList.includes(u.user_id)}
           />
         ))}
 

@@ -10,6 +10,7 @@ export default function App() {
   const [users, setUsers] = useState([]);
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [followingList, setFollowingList] = useState([]);
   const [recentFriendships, setRecentFriendships] = useState([]);
 
   const isSigningOutRef = useRef(false);
@@ -108,6 +109,11 @@ export default function App() {
   useEffect(() => {
     fetchAllUsers();
   }, []);
+
+  useEffect(() => {
+  if (user) fetchFollowingList();
+}, [user]);
+
 
   // Add this useEffect to reset the flag when user signs out
   useEffect(() => {
@@ -210,6 +216,20 @@ export default function App() {
       console.error("markUserOnline error", e);
     }
   }
+
+  async function fetchFollowingList() {
+  if (!user) return;
+  try {
+    const { data, error } = await supabase
+      .from("user_follows")
+      .select("followee_id")
+      .eq("follower_id", user.id);
+    if (error) throw error;
+    setFollowingList(data.map((d) => d.followee_id));
+  } catch (err) {
+    console.error("fetchFollowingList error:", err);
+  }
+}
 
   // Reliable offline call
   async function markUserOfflineViaService(email) {
@@ -322,6 +342,8 @@ export default function App() {
           user2: targetUserId,
         });
       }
+
+      await fetchFollowingList();
 
     } catch (e) {
       console.error('handleFollow error', e);
@@ -447,6 +469,7 @@ export default function App() {
         user={user}
         users={users}
         setUsers={setUsers}
+        followingList={followingList}
         onSignOut={handleSignOut}
         onTwinkle={handleTwinkle}
         messages={messages}

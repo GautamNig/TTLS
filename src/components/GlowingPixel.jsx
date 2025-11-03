@@ -6,6 +6,7 @@ export default function GlowingPixel({
   isCurrentUser,
   onFollow,
   recentFriendships = [],
+  isFollowing = false,
 }) {
   const [pos, setPos] = useState({
     x: userData.current_x ?? userData.initial_x ?? Math.random(),
@@ -67,10 +68,10 @@ export default function GlowingPixel({
 
   const connectedUser = friendConnection
     ? allUsers.find(
-        (u) =>
-          u.user_id === friendConnection.user1 ||
-          u.user_id === friendConnection.user2
-      )
+      (u) =>
+        u.user_id === friendConnection.user1 ||
+        u.user_id === friendConnection.user2
+    )
     : null;
 
   return (
@@ -142,18 +143,15 @@ export default function GlowingPixel({
             className="absolute top-full left-1/2 transform -translate-x-1/2 mt-1 flex flex-col items-center gap-1"
             style={{ pointerEvents: "auto" }}
           >
-            {!followed && (
+            {!isCurrentUser && !isFollowing && (
               <button
-                onClick={() => {
-                  console.log("Follow clicked for", userData.user_id);
-                  setFollowed(true);
-                  onFollow?.(userData.user_id);
-                }}
-                className="px-2 py-1 bg-blue-600 text-xs rounded hover:bg-blue-500 cursor-pointer"
+                onClick={() => onFollow?.(userData.user_id)}
+                className="px-2 py-1 bg-blue-600 text-xs rounded hover:bg-blue-500"
               >
                 Follow
               </button>
             )}
+
           </div>
         )}
       </div>
