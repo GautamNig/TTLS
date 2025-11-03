@@ -26,7 +26,7 @@ export default function NightSky({
     <div style={{
       display: 'grid',
       gridTemplateColumns: '1fr 384px',
-      height: '150vh',
+      height: '100vh',
       width: '100vw',
       overflow: 'hidden'
     }} className="bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
