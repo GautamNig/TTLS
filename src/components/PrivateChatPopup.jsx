@@ -1,24 +1,90 @@
 // src/components/PrivateChatPopup.jsx
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 
 export default function PrivateChatPopup({ 
   user, 
   friends, 
   privateMessages, 
-  onSendPrivateMessage 
+  onSendPrivateMessage,
+  onMarkMessagesAsRead
 }) {
   const [isOpen, setIsOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState(null); // friendId of active chat
-  const [messageInputs, setMessageInputs] = useState({}); // { friendId: text }
+  const [activeTab, setActiveTab] = useState(null);
+  const [messageInputs, setMessageInputs] = useState({});
+  const [readMessageIds, setReadMessageIds] = useState(new Set()); // Track individual message IDs that are read
 
   const messagesEndRefs = useRef({});
+  const lastMarkedReadRef = useRef({}); // Track last time we marked messages as read per friend
 
-  // Auto-scroll to bottom when messages change
+  // Remove duplicate friends based on friend_id
+  const uniqueFriends = React.useMemo(() => {
+    const seen = new Set();
+    return friends.filter(friend => {
+      if (seen.has(friend.friend_id)) {
+        return false;
+      }
+      seen.add(friend.friend_id);
+      return true;
+    });
+  }, [friends]);
+
+  // Function to get unread messages for a friend
+  const getUnreadMessages = useCallback((friendId) => {
+    const messages = privateMessages[friendId] || [];
+    return messages.filter(msg => 
+      msg.receiver_id === user.id && !msg.is_read && !readMessageIds.has(msg.id)
+    );
+  }, [user.id, privateMessages, readMessageIds]);
+
+  // Mark messages as read for a specific friend
+  const markAsRead = useCallback(async (friendId) => {
+    const unreadMessages = getUnreadMessages(friendId);
+    
+    if (unreadMessages.length > 0) {
+      // Update local state immediately for better UX
+      const unreadMessageIds = unreadMessages.map(msg => msg.id);
+      setReadMessageIds(prev => new Set([...prev, ...unreadMessageIds]));
+      
+      // Call the backend to mark as read
+      await onMarkMessagesAsRead(friendId);
+      
+      // Update last marked time
+      lastMarkedReadRef.current[friendId] = Date.now();
+    }
+  }, [getUnreadMessages, onMarkMessagesAsRead]);
+
+  // Mark messages as read when tab becomes active
+  useEffect(() => {
+    if (activeTab && isOpen) {
+      markAsRead(activeTab);
+    }
+  }, [activeTab, isOpen, markAsRead]);
+
+  // Mark messages as read when popup opens
+  useEffect(() => {
+    if (isOpen && activeTab) {
+      markAsRead(activeTab);
+    }
+  }, [isOpen, activeTab, markAsRead]);
+
+  // Auto-scroll to bottom when messages change and mark as read if viewing
   useEffect(() => {
     if (activeTab && messagesEndRefs.current[activeTab]) {
       messagesEndRefs.current[activeTab].scrollIntoView({ behavior: "smooth" });
+      
+      // If we're actively viewing the chat and new messages arrive, mark them as read
+      if (isOpen && activeTab) {
+        const unreadMessages = getUnreadMessages(activeTab);
+        if (unreadMessages.length > 0) {
+          // Only mark as read if we haven't done so recently (within 1 second)
+          const lastMarked = lastMarkedReadRef.current[activeTab] || 0;
+          if (Date.now() - lastMarked > 1000) {
+            markAsRead(activeTab);
+          }
+        }
+      }
     }
-  }, [privateMessages, activeTab]);
+  }, [privateMessages, activeTab, isOpen, markAsRead, getUnreadMessages]);
 
   const formatTime = (timestamp) => {
     return new Date(timestamp).toLocaleTimeString([], { 
@@ -53,13 +119,13 @@ export default function PrivateChatPopup({
   const openChat = (friendId) => {
     setActiveTab(friendId);
     if (!isOpen) setIsOpen(true);
+    markAsRead(friendId);
   };
 
   const closeTab = (friendId, e) => {
     e.stopPropagation();
     if (activeTab === friendId) {
-      // Find another tab to activate, or close popup if no tabs left
-      const remainingFriends = friends.filter(f => f.friend_id !== friendId);
+      const remainingFriends = uniqueFriends.filter(f => f.friend_id !== friendId);
       if (remainingFriends.length > 0) {
         setActiveTab(remainingFriends[0].friend_id);
       } else {
@@ -70,10 +136,22 @@ export default function PrivateChatPopup({
   };
 
   const getUnreadCount = (friendId) => {
-    const messages = privateMessages[friendId] || [];
-    return messages.filter(msg => 
-      msg.receiver_id === user.id && !msg.is_read
-    ).length;
+    return getUnreadMessages(friendId).length;
+  };
+
+  // Calculate total unread count for the button
+  const totalUnreadCount = React.useMemo(() => {
+    return uniqueFriends.reduce((total, friend) => total + getUnreadCount(friend.friend_id), 0);
+  }, [uniqueFriends, getUnreadMessages]);
+
+  // Helper to check if a message should be considered read
+  const isMessageRead = (message) => {
+    if (message.sender_id === user.id) {
+      return message.is_read; // For sent messages, use database is_read
+    } else {
+      // For received messages, use local read status
+      return message.is_read || readMessageIds.has(message.id);
+    }
   };
 
   return (
@@ -100,7 +178,23 @@ export default function PrivateChatPopup({
           fontSize: '14px'
         }}
       >
-        <span>👥 Friends ({friends.length})</span>
+        <span>👥 Friends ({uniqueFriends.length})</span>
+        {totalUnreadCount > 0 && (
+          <div style={{
+            background: '#EF4444',
+            color: 'white',
+            borderRadius: '50%',
+            width: '20px',
+            height: '20px',
+            fontSize: '12px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            marginLeft: '4px'
+          }}>
+            {totalUnreadCount}
+          </div>
+        )}
       </button>
 
       {/* Popup Window */}
@@ -154,7 +248,7 @@ export default function PrivateChatPopup({
               background: 'rgba(0,0,0,0.2)',
               overflowY: 'auto'
             }}>
-              {friends.map(friend => (
+              {uniqueFriends.map(friend => (
                 <div
                   key={friend.friend_id}
                   onClick={() => openChat(friend.friend_id)}
@@ -211,7 +305,7 @@ export default function PrivateChatPopup({
                   }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <span>
-                        {getUsername(friends.find(f => f.friend_id === activeTab)?.friend_email || 'Friend')}
+                        {getUsername(uniqueFriends.find(f => f.friend_id === activeTab)?.friend_email || 'Friend')}
                       </span>
                       <button
                         onClick={(e) => closeTab(activeTab, e)}
@@ -237,6 +331,7 @@ export default function PrivateChatPopup({
                   }}>
                     {(privateMessages[activeTab] || []).map((message) => {
                       const isCurrentUser = message.sender_id === user.id;
+                      const isRead = isMessageRead(message);
                       
                       return (
                         <div
@@ -262,9 +357,21 @@ export default function PrivateChatPopup({
                               fontSize: '10px',
                               marginTop: '4px',
                               color: isCurrentUser ? 'rgba(219, 234, 254, 1)' : 'rgba(156, 163, 175, 1)',
-                              textAlign: 'right'
+                              textAlign: 'right',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'flex-end',
+                              gap: '4px'
                             }}>
                               {formatTime(message.created_at)}
+                              {isCurrentUser && (
+                                <span style={{ 
+                                  fontSize: '8px',
+                                  opacity: isRead ? 1 : 0.5 
+                                }}>
+                                  {isRead ? '✓✓' : '✓'}
+                                </span>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -317,7 +424,6 @@ export default function PrivateChatPopup({
                   </div>
                 </>
               ) : (
-                // No chat selected
                 <div style={{
                   flex: 1,
                   display: 'flex',

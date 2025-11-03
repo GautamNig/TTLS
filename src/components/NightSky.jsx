@@ -18,7 +18,8 @@ export default function NightSky({
   recentFriendships = [],
   friends = [],
   privateMessages = {},
-  onSendPrivateMessage
+  onSendPrivateMessage,
+  onMarkMessagesAsRead
 }) {
 
   return (
@@ -63,6 +64,7 @@ export default function NightSky({
           friends={friends}
           privateMessages={privateMessages}
           onSendPrivateMessage={onSendPrivateMessage}
+          onMarkMessagesAsRead={onMarkMessagesAsRead} 
         />
       </div>
 

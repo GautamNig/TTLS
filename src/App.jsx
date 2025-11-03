@@ -108,6 +108,7 @@ export default function App() {
   }, [user]);
 
   // Realtime subscription for private messages
+  // Realtime subscription for private messages - UPDATED VERSION
   useEffect(() => {
     if (!user) return;
 
@@ -120,12 +121,18 @@ export default function App() {
           schema: 'public',
           table: 'private_messages'
         },
-        (payload) => {
+        async (payload) => {
           const newMessage = payload.new;
           
           // Check if this message is for the current user
           if (newMessage.receiver_id === user.id || newMessage.sender_id === user.id) {
             const friendId = newMessage.sender_id === user.id ? newMessage.receiver_id : newMessage.sender_id;
+            
+            // If the message is for the current user and they're viewing the chat, mark as read immediately
+            if (newMessage.receiver_id === user.id) {
+              // Check if we're currently viewing this friend's chat
+              // We'll handle this in the PrivateChatPopup component
+            }
             
             setPrivateMessages(prev => ({
               ...prev,
@@ -466,6 +473,27 @@ export default function App() {
     }
   }
 
+  // In your App.jsx, add this function:
+
+// Function to mark private messages as read
+const markPrivateMessagesAsRead = async (friendId) => {
+  if (!user) return;
+  
+  try {
+    const { data, error } = await supabase.rpc('mark_private_messages_as_read', {
+      p_user_id: user.id,
+      p_friend_id: friendId
+    });
+    
+    if (error) throw error;
+    
+    console.log(`Marked ${data?.[0]?.updated_count || 0} messages as read for friend ${friendId}`);
+    
+  } catch (err) {
+    console.error('Error marking messages as read:', err);
+  }
+};
+
   // Movement: current user updates position every 500ms
   useEffect(() => {
     if (!user) return;
@@ -559,6 +587,7 @@ export default function App() {
         friends={friends}
         privateMessages={privateMessages}
         onSendPrivateMessage={handleSendPrivateMessage}
+        onMarkMessagesAsRead={markPrivateMessagesAsRead}
       />
     </div>
   );
