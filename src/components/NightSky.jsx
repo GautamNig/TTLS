@@ -26,7 +26,7 @@ export default function NightSky({
     <div style={{
       display: 'grid',
       gridTemplateColumns: '1fr 384px',
-      height: '100vh',
+      height: '150vh',
       width: '100vw',
       overflow: 'hidden'
     }} className="bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
@@ -51,12 +51,6 @@ export default function NightSky({
             isFollowing={followingList.includes(u.user_id)}
           />
         ))}
-
-        {/* Live counter */}
-        <div className="absolute bottom-6 left-6 bg-black/40 backdrop-blur-lg border border-white/10 rounded-2xl px-4 py-2 text-white z-30">
-          <div className="text-xs text-white/80">Live Stars</div>
-          <div className="font-bold text-lg">{users.length} ✨</div>
-        </div>
 
         {/* Private Chat Popup */}
         <PrivateChatPopup

@@ -46,7 +46,7 @@ export default function ChatPanel({ user, messages = [], onSend = null }) {
       {/* Header */}
       <div style={{
         flexShrink: 0,
-        height: '80px',
+        height: '100px',
         padding: '0 16px',
         borderBottom: '1px solid rgba(255,255,255,0.1)',
         background: 'linear-gradient(to right, rgba(76, 29, 149, 0.4), rgba(0, 0, 0, 0.6))',
