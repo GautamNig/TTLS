@@ -10,6 +10,8 @@ export default function App() {
   const [users, setUsers] = useState([]);
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [recentFriendships, setRecentFriendships] = useState([]);
+
   const isSigningOutRef = useRef(false);
   const driftRef = useRef({});
   // Add this ref with your other refs
@@ -290,6 +292,43 @@ export default function App() {
     }, 3000);
   }
 
+  // === FOLLOW / FRIENDSHIP SYSTEM ===
+
+  // Follow another user
+  async function handleFollow(targetUserId) {
+    if (!user) return;
+
+    try {
+      const { error } = await supabase.rpc('follow_user', {
+        p_follower: user.id,
+        p_followee: targetUserId,
+      });
+      if (error) console.error("Supabase RPC follow_user error", error);
+      else console.log("✅ follow_user executed successfully");
+
+
+      // check if mutual
+      const { data, error: checkErr } = await supabase.rpc('check_friendship', {
+        p_user1: user.id,
+        p_user2: targetUserId,
+      });
+
+      if (checkErr) throw checkErr;
+
+      if (data === true) {
+        // Broadcast friendship event to DB
+        await supabase.from("friendship_events").insert({
+          user1: user.id,
+          user2: targetUserId,
+        });
+      }
+
+    } catch (e) {
+      console.error('handleFollow error', e);
+    }
+
+  }
+
   // Sign out sequence
   async function handleSignOut() {
     if (!user) return;
@@ -367,6 +406,37 @@ export default function App() {
     return () => clearInterval(id);
   }, [user]);
 
+  // Realtime subscription for friendship glow
+  useEffect(() => {
+    const friendshipChannel = supabase
+      .channel("friendship_events_changes")
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "friendship_events" },
+        (payload) => {
+          const { user1, user2 } = payload.new;
+          const timestamp = Date.now();
+          setRecentFriendships((prev) => [
+            ...prev,
+            { user1, user2, timestamp },
+          ]);
+          setTimeout(() => {
+            setRecentFriendships((prev) =>
+              prev.filter((f) => f.timestamp !== timestamp)
+            );
+          }, 5000);
+        }
+      )
+      .subscribe((status) =>
+        console.log("Realtime friendship event status:", status)
+      );
+
+    return () => {
+      supabase.removeChannel(friendshipChannel);
+    };
+  }, []);
+
+
   if (loading) return <div className="min-h-screen flex items-center justify-center text-white">Loading...</div>;
 
   if (!user) return <AuthPage onSignIn={() => supabase.auth.signInWithOAuth({ provider: "google" })} />;
@@ -381,6 +451,8 @@ export default function App() {
         onTwinkle={handleTwinkle}
         messages={messages}
         onSendMessage={handleSendMessage}
+        handleFollow={handleFollow}
+        recentFriendships={recentFriendships}
       />
     </div>
   );

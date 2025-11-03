@@ -4,21 +4,32 @@ import ModernHeader from "./ModernHeader";
 import GlowingPixel from "./GlowingPixel";
 import ChatPanel from "./ChatPanel";
 
-export default function NightSky({ user, users = [], setUsers, onSignOut, onTwinkle, messages = [], onSendMessage = null }) {
+export default function NightSky({
+  user,
+  users = [],
+  setUsers,
+  onSignOut,
+  onTwinkle,
+  messages = [],
+  onSendMessage = null,
+  handleFollow,
+  recentFriendships = [],
+}) {
+
   return (
-    <div style={{ 
+    <div style={{
       display: 'grid',
       gridTemplateColumns: '1fr 384px',
       height: '100vh',
       width: '100vw',
       overflow: 'hidden'
     }} className="bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
-      
+
       {/* LEFT SIDE - Starfield */}
       <div style={{ position: 'relative', overflow: 'hidden' }}>
         {/* Background effects */}
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-blue-500/10 via-transparent to-transparent" />
-        
+
         {/* Header */}
         <ModernHeader user={user} onSignOut={onSignOut} onTwinkle={onTwinkle} />
 
@@ -27,9 +38,13 @@ export default function NightSky({ user, users = [], setUsers, onSignOut, onTwin
           <GlowingPixel
             key={u.id || u.email}
             userData={u}
+            allUsers={users}
             isCurrentUser={(u.email || "").toLowerCase() === (user.email || "").toLowerCase()}
+            onFollow={(targetId) => handleFollow(targetId)}
+            recentFriendships={recentFriendships}
           />
         ))}
+
 
         {/* Live counter */}
         <div className="absolute bottom-6 left-6 bg-black/40 backdrop-blur-lg border border-white/10 rounded-2xl px-4 py-2 text-white z-30">
@@ -39,16 +54,16 @@ export default function NightSky({ user, users = [], setUsers, onSignOut, onTwin
       </div>
 
       {/* RIGHT SIDE - Chat Panel with explicit height */}
-      <div style={{ 
+      <div style={{
         height: '100vh', // Explicit height
         display: 'flex',
         flexDirection: 'column'
       }} className="bg-black/60 border-l border-white/10">
-      <ChatPanel 
-        user={user} 
-        messages={messages} 
-        onSend={onSendMessage} // Make sure this prop name matches
-      />
+        <ChatPanel
+          user={user}
+          messages={messages}
+          onSend={onSendMessage} // Make sure this prop name matches
+        />
       </div>
     </div>
   );
