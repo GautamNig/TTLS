@@ -1,6 +1,5 @@
 // src/components/PrivateChatPopup.jsx
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { supabase } from "../supabaseClient";
 
 export default function PrivateChatPopup({ 
   user, 
@@ -12,10 +11,13 @@ export default function PrivateChatPopup({
   const [isOpen, setIsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState(null);
   const [messageInputs, setMessageInputs] = useState({});
-  const [hasMarkedAsRead, setHasMarkedAsRead] = useState(new Set());
+  const [markingAsRead, setMarkingAsRead] = useState(new Set());
+  const [isUserScrolling, setIsUserScrolling] = useState(false);
 
   const messagesEndRefs = useRef({});
-  const lastMarkedReadRef = useRef({});
+  const messagesContainerRefs = useRef({});
+  const scrollTimeoutRef = useRef(null);
+  const lastMessageCountRef = useRef({});
 
   // Remove duplicate friends based on friend_id
   const uniqueFriends = React.useMemo(() => {
@@ -29,7 +31,7 @@ export default function PrivateChatPopup({
     });
   }, [friends]);
 
-  // Function to get unread messages for a friend - uses ONLY database is_read status
+  // Function to get unread messages for a friend
   const getUnreadMessages = useCallback((friendId) => {
     const messages = privateMessages[friendId] || [];
     return messages.filter(msg => 
@@ -41,36 +43,84 @@ export default function PrivateChatPopup({
   const markAsRead = useCallback(async (friendId) => {
     const unreadMessages = getUnreadMessages(friendId);
     
-    if (unreadMessages.length > 0 && !hasMarkedAsRead.has(friendId)) {
-      console.log(`Marking ${unreadMessages.length} messages as read for friend ${friendId}`);
+    if (unreadMessages.length > 0 && !markingAsRead.has(friendId)) {
+      console.log(`📨 Marking ${unreadMessages.length} messages as read for friend ${friendId}`);
       
-      // Update local state to prevent duplicate calls
-      setHasMarkedAsRead(prev => new Set([...prev, friendId]));
+      // Set marking state to prevent duplicate calls
+      setMarkingAsRead(prev => new Set([...prev, friendId]));
       
-      // Call the backend to mark as read
-      await onMarkMessagesAsRead(friendId);
-      
-      // Update last marked time
-      lastMarkedReadRef.current[friendId] = Date.now();
+      try {
+        await onMarkMessagesAsRead(friendId);
+        console.log(`✅ Successfully marked messages as read for ${friendId}`);
+      } catch (error) {
+        console.error(`❌ Failed to mark messages as read:`, error);
+      } finally {
+        // Remove from marking state after a delay to allow UI to update
+        setTimeout(() => {
+          setMarkingAsRead(prev => {
+            const newSet = new Set(prev);
+            newSet.delete(friendId);
+            return newSet;
+          });
+        }, 1000);
+      }
     }
-  }, [getUnreadMessages, onMarkMessagesAsRead, hasMarkedAsRead]);
+  }, [getUnreadMessages, onMarkMessagesAsRead, markingAsRead]);
 
-  // Reset hasMarkedAsRead when privateMessages change (after database update)
-  useEffect(() => {
-    // When private messages update, reset the marked state for that friend
-    // This allows us to mark as read again if new messages arrive
-    const friendIds = Object.keys(privateMessages);
-    setHasMarkedAsRead(prev => {
-      const newSet = new Set(prev);
-      friendIds.forEach(friendId => {
-        const unreadCount = getUnreadMessages(friendId).length;
-        if (unreadCount === 0) {
-          newSet.delete(friendId);
-        }
-      });
-      return newSet;
-    });
-  }, [privateMessages, getUnreadMessages]);
+  // Handle scroll events to detect manual scrolling
+  const handleScroll = useCallback((friendId) => {
+    if (!isUserScrolling) {
+      setIsUserScrolling(true);
+    }
+
+    // Clear any existing timeout
+    if (scrollTimeoutRef.current) {
+      clearTimeout(scrollTimeoutRef.current);
+    }
+
+    // Set a timeout to reset the scrolling flag when user stops scrolling
+    scrollTimeoutRef.current = setTimeout(() => {
+      setIsUserScrolling(false);
+    }, 1000);
+  }, [isUserScrolling]);
+
+  // Smart auto-scroll function
+  const smartScrollToBottom = useCallback((friendId) => {
+    if (!activeTab || activeTab !== friendId) return;
+    
+    const container = messagesContainerRefs.current[friendId];
+    const messagesEnd = messagesEndRefs.current[friendId];
+    
+    if (!container || !messagesEnd) return;
+
+    // If user is manually scrolling, don't auto-scroll
+    if (isUserScrolling) {
+      return;
+    }
+
+    // Check if user is already near the bottom
+    const scrollThreshold = 100; // pixels from bottom
+    const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= scrollThreshold;
+
+    // Only auto-scroll if:
+    // 1. User is near the bottom, OR
+    // 2. New messages were added (not just loading existing ones)
+    const currentMessageCount = privateMessages[friendId]?.length || 0;
+    const lastMessageCount = lastMessageCountRef.current[friendId] || 0;
+    const hasNewMessages = currentMessageCount > lastMessageCount;
+
+    if (isNearBottom || hasNewMessages) {
+      setTimeout(() => {
+        messagesEnd.scrollIntoView({ 
+          behavior: "smooth",
+          block: "nearest"
+        });
+      }, 100);
+    }
+
+    // Update message count reference
+    lastMessageCountRef.current[friendId] = currentMessageCount;
+  }, [activeTab, isUserScrolling, privateMessages]);
 
   // Mark messages as read when tab becomes active
   useEffect(() => {
@@ -79,31 +129,40 @@ export default function PrivateChatPopup({
     }
   }, [activeTab, isOpen, markAsRead]);
 
-  // Mark messages as read when popup opens
+  // Mark messages as read when popup opens or active tab changes
   useEffect(() => {
     if (isOpen && activeTab) {
-      markAsRead(activeTab);
+      const timer = setTimeout(() => {
+        markAsRead(activeTab);
+      }, 100);
+      return () => clearTimeout(timer);
     }
   }, [isOpen, activeTab, markAsRead]);
 
-  // Auto-scroll to bottom when messages change and mark as read if viewing
+  // Smart auto-scroll when messages change
   useEffect(() => {
-    if (activeTab && messagesEndRefs.current[activeTab]) {
-      messagesEndRefs.current[activeTab].scrollIntoView({ behavior: "smooth" });
-      
-      // If we're actively viewing the chat and new messages arrive, mark them as read
-      if (isOpen && activeTab) {
-        const unreadMessages = getUnreadMessages(activeTab);
-        if (unreadMessages.length > 0) {
-          // Only mark as read if we haven't done so recently (within 1 second)
-          const lastMarked = lastMarkedReadRef.current[activeTab] || 0;
-          if (Date.now() - lastMarked > 1000) {
-            markAsRead(activeTab);
-          }
-        }
-      }
+    if (activeTab) {
+      smartScrollToBottom(activeTab);
     }
-  }, [privateMessages, activeTab, isOpen, markAsRead, getUnreadMessages]);
+  }, [privateMessages, activeTab, smartScrollToBottom]);
+
+  // Reset scrolling state when changing tabs
+  useEffect(() => {
+    if (activeTab) {
+      setIsUserScrolling(false);
+      // Reset message count when changing tabs
+      lastMessageCountRef.current[activeTab] = privateMessages[activeTab]?.length || 0;
+    }
+  }, [activeTab, privateMessages]);
+
+  // Clean up timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (scrollTimeoutRef.current) {
+        clearTimeout(scrollTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // Mark messages as read when user focuses on input area
   const handleInputFocus = useCallback((friendId) => {
@@ -118,6 +177,15 @@ export default function PrivateChatPopup({
       markAsRead(friendId);
     }
   }, [activeTab, isOpen, markAsRead]);
+
+  // Scroll to bottom manually (for scroll button)
+  const handleScrollToBottom = useCallback((friendId) => {
+    const messagesEnd = messagesEndRefs.current[friendId];
+    if (messagesEnd) {
+      setIsUserScrolling(false);
+      messagesEnd.scrollIntoView({ behavior: "smooth" });
+    }
+  }, []);
 
   const formatTime = (timestamp) => {
     return new Date(timestamp).toLocaleTimeString([], { 
@@ -135,6 +203,8 @@ export default function PrivateChatPopup({
     if (text.trim()) {
       onSendPrivateMessage(friendId, text.trim());
       setMessageInputs(prev => ({ ...prev, [friendId]: '' }));
+      // Reset scrolling state when sending a message
+      setIsUserScrolling(false);
     }
   };
 
@@ -152,6 +222,8 @@ export default function PrivateChatPopup({
   const openChat = (friendId) => {
     setActiveTab(friendId);
     if (!isOpen) setIsOpen(true);
+    // Reset scrolling state when opening a chat
+    setIsUserScrolling(false);
   };
 
   const closeTab = (friendId, e) => {
@@ -175,6 +247,17 @@ export default function PrivateChatPopup({
   const totalUnreadCount = React.useMemo(() => {
     return uniqueFriends.reduce((total, friend) => total + getUnreadCount(friend.friend_id), 0);
   }, [uniqueFriends, getUnreadMessages]);
+
+  // Check if scroll to bottom button should be shown
+  const shouldShowScrollButton = (friendId) => {
+    const container = messagesContainerRefs.current[friendId];
+    if (!container) return false;
+    
+    const scrollThreshold = 200; // pixels from bottom
+    const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= scrollThreshold;
+    
+    return !isNearBottom;
+  };
 
   return (
     <>
@@ -309,12 +392,21 @@ export default function PrivateChatPopup({
                       {getUnreadCount(friend.friend_id)}
                     </div>
                   )}
+                  {markingAsRead.has(friend.friend_id) && (
+                    <div style={{
+                      width: '8px',
+                      height: '8px',
+                      borderRadius: '50%',
+                      background: '#3B82F6',
+                      animation: 'pulse 1s infinite'
+                    }} />
+                  )}
                 </div>
               ))}
             </div>
 
             {/* Chat Area */}
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative' }}>
               {activeTab ? (
                 <>
                   {/* Chat Header */}
@@ -328,6 +420,11 @@ export default function PrivateChatPopup({
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <span>
                         {getUsername(uniqueFriends.find(f => f.friend_id === activeTab)?.friend_email || 'Friend')}
+                        {markingAsRead.has(activeTab) && (
+                          <span style={{ marginLeft: '8px', fontSize: '12px', color: '#3B82F6' }}>
+                            (Marking as read...)
+                          </span>
+                        )}
                       </span>
                       <button
                         onClick={(e) => closeTab(activeTab, e)}
@@ -344,8 +441,9 @@ export default function PrivateChatPopup({
                     </div>
                   </div>
 
-                  {/* Messages - Click to mark as read */}
+                  {/* Messages Container */}
                   <div 
+                    ref={el => messagesContainerRefs.current[activeTab] = el}
                     style={{
                       flex: 1,
                       overflowY: 'auto',
@@ -354,6 +452,7 @@ export default function PrivateChatPopup({
                       cursor: 'pointer'
                     }}
                     onClick={() => handleChatAreaClick(activeTab)}
+                    onScroll={() => handleScroll(activeTab)}
                   >
                     {(privateMessages[activeTab] || []).map((message) => {
                       const isCurrentUser = message.sender_id === user.id;
@@ -404,6 +503,34 @@ export default function PrivateChatPopup({
                     })}
                     <div ref={el => messagesEndRefs.current[activeTab] = el} />
                   </div>
+
+                  {/* Scroll to Bottom Button */}
+                  {shouldShowScrollButton(activeTab) && (
+                    <button
+                      onClick={() => handleScrollToBottom(activeTab)}
+                      style={{
+                        position: 'absolute',
+                        bottom: '70px',
+                        right: '20px',
+                        background: 'rgba(59, 130, 246, 0.9)',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '50%',
+                        width: '40px',
+                        height: '40px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '18px',
+                        boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+                        zIndex: 100
+                      }}
+                      title="Scroll to bottom"
+                    >
+                      ↓
+                    </button>
+                  )}
 
                   {/* Input Area */}
                   <div style={{
@@ -465,6 +592,16 @@ export default function PrivateChatPopup({
           </div>
         </div>
       )}
+
+      {/* Add pulse animation */}
+      <style>
+        {`
+          @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+          }
+        `}
+      </style>
     </>
   );
 }
