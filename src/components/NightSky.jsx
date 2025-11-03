@@ -3,6 +3,7 @@ import React from "react";
 import ModernHeader from "./ModernHeader";
 import GlowingPixel from "./GlowingPixel";
 import ChatPanel from "./ChatPanel";
+import PrivateChatPopup from "./PrivateChatPopup";
 
 export default function NightSky({
   user,
@@ -15,7 +16,9 @@ export default function NightSky({
   onSendMessage = null,
   handleFollow,
   recentFriendships = [],
-  
+  friends = [],
+  privateMessages = {},
+  onSendPrivateMessage
 }) {
 
   return (
@@ -48,24 +51,31 @@ export default function NightSky({
           />
         ))}
 
-
         {/* Live counter */}
         <div className="absolute bottom-6 left-6 bg-black/40 backdrop-blur-lg border border-white/10 rounded-2xl px-4 py-2 text-white z-30">
           <div className="text-xs text-white/80">Live Stars</div>
           <div className="font-bold text-lg">{users.length} ✨</div>
         </div>
+
+        {/* Private Chat Popup */}
+        <PrivateChatPopup
+          user={user}
+          friends={friends}
+          privateMessages={privateMessages}
+          onSendPrivateMessage={onSendPrivateMessage}
+        />
       </div>
 
-      {/* RIGHT SIDE - Chat Panel with explicit height */}
+      {/* RIGHT SIDE - Public Chat Panel */}
       <div style={{
-        height: '100vh', // Explicit height
+        height: '100vh',
         display: 'flex',
         flexDirection: 'column'
       }} className="bg-black/60 border-l border-white/10">
         <ChatPanel
           user={user}
           messages={messages}
-          onSend={onSendMessage} // Make sure this prop name matches
+          onSend={onSendMessage}
         />
       </div>
     </div>

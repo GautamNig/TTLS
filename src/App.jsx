@@ -9,13 +9,14 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [users, setUsers] = useState([]);
   const [messages, setMessages] = useState([]);
+  const [privateMessages, setPrivateMessages] = useState({}); // { friendId: [messages] }
   const [loading, setLoading] = useState(true);
   const [followingList, setFollowingList] = useState([]);
   const [recentFriendships, setRecentFriendships] = useState([]);
+  const [friends, setFriends] = useState([]); // Mutual friends
 
   const isSigningOutRef = useRef(false);
   const driftRef = useRef({});
-  // Add this ref with your other refs
   const hasSentJoinMessageRef = useRef(false);
 
   // Initial session + auth listener
@@ -38,6 +39,8 @@ export default function App() {
         setUser(null);
         setUsers([]);
         setMessages([]);
+        setPrivateMessages({});
+        setFriends([]);
       }
     });
 
@@ -74,7 +77,7 @@ export default function App() {
     };
   }, []);
 
-  // Realtime subscription for chat messages
+  // Realtime subscription for public chat messages
   useEffect(() => {
     if (!user) return;
 
@@ -89,7 +92,6 @@ export default function App() {
         },
         (payload) => {
           const newMessage = payload.new;
-          // Only show messages from the last 5 minutes
           const messageTime = new Date(newMessage.created_at);
           const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
 
@@ -105,15 +107,54 @@ export default function App() {
     };
   }, [user]);
 
-  // Initial fetch of users
+  // Realtime subscription for private messages
+  useEffect(() => {
+    if (!user) return;
+
+    const privateChannel = supabase
+      .channel('private_messages')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'private_messages'
+        },
+        (payload) => {
+          const newMessage = payload.new;
+          
+          // Check if this message is for the current user
+          if (newMessage.receiver_id === user.id || newMessage.sender_id === user.id) {
+            const friendId = newMessage.sender_id === user.id ? newMessage.receiver_id : newMessage.sender_id;
+            
+            setPrivateMessages(prev => ({
+              ...prev,
+              [friendId]: [...(prev[friendId] || []), newMessage]
+            }));
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(privateChannel);
+    };
+  }, [user]);
+
+  // Initial fetch of users and friends
   useEffect(() => {
     fetchAllUsers();
-  }, []);
+    if (user) {
+      fetchFriends();
+    }
+  }, [user]);
 
   useEffect(() => {
-  if (user) fetchFollowingList();
-}, [user]);
-
+    if (user) {
+      fetchFollowingList();
+      fetchFriends();
+    }
+  }, [user]);
 
   // Add this useEffect to reset the flag when user signs out
   useEffect(() => {
@@ -126,7 +167,6 @@ export default function App() {
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible' && user) {
-        // When tab becomes visible, just update last_seen but don't send join message
         (async () => {
           try {
             const email = (user.email || "").toLowerCase();
@@ -179,6 +219,44 @@ export default function App() {
     }
   }
 
+  // Fetch mutual friends
+  async function fetchFriends() {
+    if (!user) return;
+    try {
+      const { data, error } = await supabase.rpc('get_mutual_friends', { user_uuid: user.id });
+      if (error) throw error;
+      setFriends(data || []);
+      
+      // Fetch existing private messages for each friend
+      data.forEach(friend => {
+        fetchPrivateMessages(friend.friend_id);
+      });
+    } catch (err) {
+      console.error("fetchFriends error:", err);
+    }
+  }
+
+  // Fetch private messages for a specific friend
+  async function fetchPrivateMessages(friendId) {
+    if (!user) return;
+    try {
+      const { data, error } = await supabase
+        .from('private_messages')
+        .select('*')
+        .or(`and(sender_id.eq.${user.id},receiver_id.eq.${friendId}),and(sender_id.eq.${friendId},receiver_id.eq.${user.id})`)
+        .order('created_at', { ascending: true });
+
+      if (error) throw error;
+      
+      setPrivateMessages(prev => ({
+        ...prev,
+        [friendId]: data || []
+      }));
+    } catch (err) {
+      console.error("fetchPrivateMessages error:", err);
+    }
+  }
+
   // System message function
   const sendSystemMessage = async (content, type = 'info') => {
     try {
@@ -207,7 +285,6 @@ export default function App() {
       if (error) throw error;
       await fetchAllUsers();
 
-      // Only send join message if we haven't sent one recently
       if (!hasSentJoinMessageRef.current) {
         await sendSystemMessage(`${authUser.email} joined the chat`, 'join');
         hasSentJoinMessageRef.current = true;
@@ -218,18 +295,18 @@ export default function App() {
   }
 
   async function fetchFollowingList() {
-  if (!user) return;
-  try {
-    const { data, error } = await supabase
-      .from("user_follows")
-      .select("followee_id")
-      .eq("follower_id", user.id);
-    if (error) throw error;
-    setFollowingList(data.map((d) => d.followee_id));
-  } catch (err) {
-    console.error("fetchFollowingList error:", err);
+    if (!user) return;
+    try {
+      const { data, error } = await supabase
+        .from("user_follows")
+        .select("followee_id")
+        .eq("follower_id", user.id);
+      if (error) throw error;
+      setFollowingList(data.map((d) => d.followee_id));
+    } catch (err) {
+      console.error("fetchFollowingList error:", err);
+    }
   }
-}
 
   // Reliable offline call
   async function markUserOfflineViaService(email) {
@@ -241,7 +318,7 @@ export default function App() {
     }
   }
 
-  // Handle sending chat messages
+  // Handle sending public chat messages
   const handleSendMessage = async (content) => {
     if (!user || !content.trim()) return;
 
@@ -260,12 +337,29 @@ export default function App() {
     }
   };
 
+  // Handle sending private messages
+  const handleSendPrivateMessage = async (friendId, content) => {
+    if (!user || !content.trim()) return;
+
+    try {
+      await supabase
+        .from('private_messages')
+        .insert({
+          sender_id: user.id,
+          receiver_id: friendId,
+          content: content.trim(),
+          created_at: new Date().toISOString()
+        });
+    } catch (error) {
+      console.error('Error sending private message:', error);
+    }
+  };
+
   // Twinkle function
   async function handleTwinkle() {
     if (!user) return;
     const email = (user.email || "").toLowerCase();
 
-    // Set twinkle state locally and in DB
     setUsers(prev =>
       prev.map(u =>
         (u.email || "").toLowerCase() === email
@@ -287,7 +381,6 @@ export default function App() {
       console.error("Error setting twinkle true:", err);
     }
 
-    // Revert after 3 seconds
     setTimeout(async () => {
       setUsers(prev =>
         prev.map(u =>
@@ -313,8 +406,6 @@ export default function App() {
   }
 
   // === FOLLOW / FRIENDSHIP SYSTEM ===
-
-  // Follow another user
   async function handleFollow(targetUserId) {
     if (!user) return;
 
@@ -326,8 +417,6 @@ export default function App() {
       if (error) console.error("Supabase RPC follow_user error", error);
       else console.log("✅ follow_user executed successfully");
 
-
-      // check if mutual
       const { data, error: checkErr } = await supabase.rpc('check_friendship', {
         p_user1: user.id,
         p_user2: targetUserId,
@@ -336,11 +425,12 @@ export default function App() {
       if (checkErr) throw checkErr;
 
       if (data === true) {
-        // Broadcast friendship event to DB
         await supabase.from("friendship_events").insert({
           user1: user.id,
           user2: targetUserId,
         });
+        // Refresh friends list when new friendship is formed
+        fetchFriends();
       }
 
       await fetchFollowingList();
@@ -348,7 +438,6 @@ export default function App() {
     } catch (e) {
       console.error('handleFollow error', e);
     }
-
   }
 
   // Sign out sequence
@@ -358,24 +447,16 @@ export default function App() {
     if (isSigningOutRef.current) return;
     isSigningOutRef.current = true;
 
-    // Send leave message BEFORE signing out
     await sendSystemMessage(`${user.email} left the chat`, 'leave');
 
-    // Optimistic local update
     setUsers((prev) => prev.map((u) => ((u.email || "").toLowerCase() === email ? { ...u, is_online: false, luminosity: 0.1 } : u)));
 
     try {
-      // 1) server-side mark offline via service role
       await markUserOfflineViaService(email);
-
-      // 2) remove realtime channels
       try { await supabase.removeAllChannels(); } catch (e) { console.warn("removeAllChannels failed", e); }
-
-      // 3) sign out
       const { error } = await supabase.auth.signOut();
       if (error) console.warn("auth.signOut error", error);
 
-      // final local cleanup
       setUser(null);
       setUsers((prev) => prev.map((u) => ((u.email || "").toLowerCase() === email ? { ...u, is_online: false, luminosity: 0.1 } : u)));
     } catch (e) {
@@ -390,7 +471,6 @@ export default function App() {
     if (!user) return;
     const email = (user.email || "").toLowerCase();
 
-    // Create drift vector if not present
     if (!driftRef.current[email]) {
       driftRef.current[email] = {
         dx: (Math.random() - 0.5) * 0.01,
@@ -404,13 +484,11 @@ export default function App() {
           if ((u.email || "").toLowerCase() !== email || !u.is_online) return u;
           let nx = (u.current_x ?? u.initial_x ?? 0.5) + driftRef.current[email].dx;
           let ny = (u.current_y ?? u.initial_y ?? 0.5) + driftRef.current[email].dy;
-          // Wrap around
           if (nx > 1) nx = 0;
           if (nx < 0) nx = 1;
           if (ny > 1) ny = 0;
           if (ny < 0) ny = 1;
 
-          // Write to DB
           (async () => {
             try {
               const { error } = await supabase.rpc("update_user_position", { p_email: email, p_x: nx, p_y: ny });
@@ -447,6 +525,9 @@ export default function App() {
               prev.filter((f) => f.timestamp !== timestamp)
             );
           }, 5000);
+          
+          // Refresh friends list when new friendship is detected
+          fetchFriends();
         }
       )
       .subscribe((status) =>
@@ -457,7 +538,6 @@ export default function App() {
       supabase.removeChannel(friendshipChannel);
     };
   }, []);
-
 
   if (loading) return <div className="min-h-screen flex items-center justify-center text-white">Loading...</div>;
 
@@ -476,6 +556,9 @@ export default function App() {
         onSendMessage={handleSendMessage}
         handleFollow={handleFollow}
         recentFriendships={recentFriendships}
+        friends={friends}
+        privateMessages={privateMessages}
+        onSendPrivateMessage={handleSendPrivateMessage}
       />
     </div>
   );
