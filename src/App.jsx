@@ -431,39 +431,75 @@ export default function App() {
   }
 
   // === FOLLOW / FRIENDSHIP SYSTEM ===
-  async function handleFollow(targetUserId) {
-    if (!user) return;
+  // Update the handleFollow function in App.jsx
+// Replace the handleFollow function in App.jsx
+async function handleFollow(targetUserId) {
+  if (!user) return;
 
-    try {
-      const { error } = await supabase.rpc('follow_user', {
-        p_follower: user.id,
-        p_followee: targetUserId,
-      });
-      if (error) console.error("Supabase RPC follow_user error", error);
-      else console.log("✅ follow_user executed successfully");
-
-      const { data, error: checkErr } = await supabase.rpc('check_friendship', {
-        p_user1: user.id,
-        p_user2: targetUserId,
-      });
-
-      if (checkErr) throw checkErr;
-
-      if (data === true) {
-        await supabase.from("friendship_events").insert({
-          user1: user.id,
-          user2: targetUserId,
-        });
-        // Refresh friends list when new friendship is formed
-        fetchFriends();
-      }
-
-      await fetchFollowingList();
-
-    } catch (e) {
-      console.error('handleFollow error', e);
+  try {
+    console.log('🔄 Attempting to follow user:', targetUserId);
+    
+    const { error } = await supabase.rpc('follow_user', {
+      p_follower: user.id,
+      p_followee: targetUserId,
+    });
+    
+    if (error) {
+      console.error("❌ Supabase RPC follow_user error", error);
+      // Try direct insert as fallback
+      await followUserDirectly(targetUserId);
+      return;
     }
+    
+    console.log("✅ follow_user executed successfully");
+
+    // Check if this created a mutual friendship
+    const { data, error: checkErr } = await supabase.rpc('check_friendship', {
+      p_user1: user.id,
+      p_user2: targetUserId,
+    });
+
+    if (checkErr) {
+      console.error("❌ check_friendship error", checkErr);
+    } else if (data === true) {
+      console.log("🎉 Friendship formed! Creating friendship event");
+      await supabase.from("friendship_events").insert({
+        user1: user.id,
+        user2: targetUserId,
+      });
+      // Refresh friends list when new friendship is formed
+      fetchFriends();
+    }
+
+    await fetchFollowingList();
+
+  } catch (e) {
+    console.error('❌ handleFollow error', e);
   }
+}
+
+// Add this function to App.jsx
+async function followUserDirectly(targetUserId) {
+  try {
+    console.log('🔄 Trying direct follow insert for:', targetUserId);
+    const { error } = await supabase
+      .from('user_follows')
+      .insert({
+        follower_id: user.id,
+        followee_id: targetUserId
+      })
+      .select();
+    
+    if (error) {
+      console.error('❌ Direct follow insert error:', error);
+    } else {
+      console.log('✅ Direct follow insert successful');
+      await fetchFollowingList();
+    }
+  } catch (err) {
+    console.error('❌ followUserDirectly error:', err);
+  }
+}
 
   // Sign out sequence
   async function handleSignOut() {
@@ -490,6 +526,31 @@ export default function App() {
       isSigningOutRef.current = false;
     }
   }
+
+  // Add this function to App.jsx (around line 570)
+const reloadAllFriendshipData = async () => {
+  if (!user) return;
+  
+  console.log('🔄 Reloading all friendship data for user:', user.id);
+  
+  try {
+    // Clear existing state
+    setFriends([]);
+    setFollowingList([]);
+    
+    // Wait a bit for state to clear
+    await new Promise(resolve => setTimeout(resolve, 100));
+    
+    // Reload all data
+    await fetchFollowingList();
+    await fetchFriends();
+    
+    console.log('✅ Friendship data reload complete');
+    
+  } catch (err) {
+    console.error('❌ Error reloading friendship data:', err);
+  }
+};
 
   // In your App.jsx, add this function:
 
