@@ -233,6 +233,38 @@ export default function RoomListPanel({ user }) {
         Available Rooms ({rooms.length})
       </h3>
 
+      {/* ADD THIS: Current Room Status */}
+      {currentUserRoom && (
+        <div style={{
+          background: 'rgba(16, 185, 129, 0.2)',
+          border: '1px solid rgba(16, 185, 129, 0.4)',
+          borderRadius: '8px',
+          padding: '8px 12px',
+          marginBottom: '12px',
+          color: '#10B981',
+          fontSize: '12px',
+          textAlign: 'center'
+        }}>
+          ✅ You are in: {rooms.find(r => r.id === currentUserRoom)?.name || 'a room'}
+        </div>
+      )}
+
+      {/* ADD THIS: Not in any room status */}
+      {!currentUserRoom && !userRoomsLoading && (
+        <div style={{
+          background: 'rgba(59, 130, 246, 0.2)',
+          border: '1px solid rgba(59, 130, 246, 0.4)',
+          borderRadius: '8px',
+          padding: '8px 12px',
+          marginBottom: '12px',
+          color: '#3B82F6',
+          fontSize: '12px',
+          textAlign: 'center'
+        }}>
+          🌌 You are not in any room
+        </div>
+      )}
+
       {loading ? (
         <div style={{ color: 'white', textAlign: 'center' }}>Loading rooms...</div>
       ) : rooms.length === 0 ? (
