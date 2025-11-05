@@ -32,32 +32,43 @@ export default function App() {
       setLoading(false);
     })();
 
-    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+    const { data: sub } = supabase.auth.onAuthStateChange(async (event, session) => {
       console.log("🔐 Auth change:", event);
       if (event === "SIGNED_IN" && session?.user) {
+        console.log("👤 Setting user state:", session.user.email);
         setUser(session.user);
         markUserOnline(session.user).catch((e) => console.error(e));
 
-        // Add proper sequencing for room data loading
+        // FIX: Wait for React to update the user state BEFORE loading room data
         setTimeout(async () => {
           console.log('🔄 Loading user data after sign in...');
+          console.log('👤 Current user state:', user?.email); // Debug current state
 
-          // First load basic data
-          await fetchFriends();
+          try {
+            // Wait a bit more to ensure user state is updated
+            await new Promise(resolve => setTimeout(resolve, 100));
 
-          // Then load room data with proper sequencing
-          await fetchRooms();
-          await fetchCurrentUserRoom();
+            console.log('📥 Step 1: Fetching current user room...');
+            const roomId = await fetchCurrentUserRoom(session.user);
 
-          console.log('✅ All user data loaded after sign in');
+            console.log('📥 Step 2: Fetching rooms...');
+            const roomsData = await fetchRooms();
 
-          // Debug: Check if user should be in a room
-          if (currentUserRoom) {
-            console.log('🎯 User should be seeing room chat for:', currentUserRoom);
-          } else {
-            console.log('🎯 User is not in any room');
+            console.log('📥 Step 3: Fetching friends...');
+            await fetchFriends();
+
+            console.log('✅ All user data loaded after sign in');
+
+            console.log('🎯 Final room state:', {
+              currentUserRoom: roomId,
+              roomsCount: roomsData.length,
+              userEmail: user?.email
+            });
+
+          } catch (error) {
+            console.error('❌ Error loading user data:', error);
           }
-        }, 1500); // Slightly longer delay to ensure everything is ready
+        }, 100); // Reduced delay to 100ms
       } else if (event === "SIGNED_OUT") {
         console.log('🔐 User signed out, clearing all states');
         setUser(null);
@@ -66,8 +77,8 @@ export default function App() {
         setPrivateMessages({});
         setFriends([]);
         setFollowingList([]);
-        setRooms([]); // ADD THIS
-        setCurrentUserRoom(null); // ADD THIS
+        setRooms([]);
+        setCurrentUserRoom(null);
       }
     });
 
@@ -277,108 +288,121 @@ export default function App() {
 
   // Add this function to App.jsx
   // In App.jsx, update the joinRoom function
-// Simplified joinRoom using the helper
-// Replace the joinRoom function in App.jsx with this version
-// Update the joinRoom function in App.jsx to update BOTH old and new rooms
-const joinRoom = async (roomId) => {
-  if (!user) return;
-  
-  try {
-    console.log('🔄 joinRoom: Starting process for room:', roomId);
-    console.log('🔍 joinRoom: Current user:', user.id, user.email);
-
-    // STEP 1: Get current room membership BEFORE any changes
-    const { data: currentMemberships, error: currentError } = await supabase
-      .from('user_room_memberships')
-      .select('room_id')
-      .eq('user_id', user.id);
-    
-    const oldRoomId = currentMemberships && currentMemberships.length > 0 ? currentMemberships[0].room_id : null;
-    console.log('📊 joinRoom: User currently in room:', oldRoomId);
-
-    // STEP 2: Leave current room if exists
-    if (oldRoomId) {
-      console.log('🚪 joinRoom: Leaving old room:', oldRoomId);
-      const { error: leaveError } = await supabase
-        .from('user_room_memberships')
-        .delete()
-        .eq('user_id', user.id);
-      
-      if (leaveError) {
-        console.error('❌ joinRoom: Error leaving old room:', leaveError);
-      } else {
-        console.log('✅ joinRoom: Successfully left old room');
-        
-        // Update slots for OLD room immediately after leaving
-        console.log('🔄 joinRoom: Updating slots for old room:', oldRoomId);
-        await updateRoomSlots(oldRoomId);
-      }
-    }
-
-    // STEP 3: Join new room
-    console.log('🎯 joinRoom: Joining new room:', roomId);
-    const { error: joinError } = await supabase
-      .from('user_room_memberships')
-      .insert({
-        user_id: user.id,
-        room_id: roomId
-      });
-    
-    if (joinError) {
-      console.error('❌ joinRoom: Error joining new room:', joinError);
-      alert('Error joining room: ' + joinError.message);
-      return;
-    }
-    console.log('✅ joinRoom: Successfully joined new room');
-
-    // STEP 4: Update slots for NEW room
-    console.log('🔄 joinRoom: Updating slots for new room:', roomId);
-    await updateRoomSlots(roomId);
-
-    // STEP 5: Refresh all data
-    console.log('🔄 joinRoom: Refreshing room data...');
-    await fetchRooms();
-    await fetchCurrentUserRoom();
-    
-    console.log('✅ joinRoom: Process completed successfully');
-    
-  } catch (error) {
-    console.error('❌ joinRoom: Unexpected error:', error);
-    alert('Error joining room: ' + error.message);
-  }
-};
-  // Add these functions to App.jsx (around line 600, before joinRoom)
-
-  // Fetch user's current room
-  const fetchCurrentUserRoom = async () => {
+  // Simplified joinRoom using the helper
+  // Replace the joinRoom function in App.jsx with this version
+  // Update the joinRoom function in App.jsx to update BOTH old and new rooms
+  const joinRoom = async (roomId) => {
     if (!user) return;
 
     try {
-      console.log('🔄 Fetching current user room...');
-      const { data: userRooms, error } = await supabase
+      console.log('🔄 joinRoom: Starting process for room:', roomId);
+      console.log('🔍 joinRoom: Current user:', user.id, user.email);
+
+      // STEP 1: Get current room membership BEFORE any changes
+      const { data: currentMemberships, error: currentError } = await supabase
         .from('user_room_memberships')
         .select('room_id')
         .eq('user_id', user.id);
 
-      if (error) {
-        console.error('❌ Error fetching user rooms:', error);
+      const oldRoomId = currentMemberships && currentMemberships.length > 0 ? currentMemberships[0].room_id : null;
+      console.log('📊 joinRoom: User currently in room:', oldRoomId);
+
+      // STEP 2: Leave current room if exists
+      if (oldRoomId) {
+        console.log('🚪 joinRoom: Leaving old room:', oldRoomId);
+        const { error: leaveError } = await supabase
+          .from('user_room_memberships')
+          .delete()
+          .eq('user_id', user.id);
+
+        if (leaveError) {
+          console.error('❌ joinRoom: Error leaving old room:', leaveError);
+        } else {
+          console.log('✅ joinRoom: Successfully left old room');
+
+          // Update slots for OLD room immediately after leaving
+          console.log('🔄 joinRoom: Updating slots for old room:', oldRoomId);
+          await updateRoomSlots(oldRoomId);
+        }
+      }
+
+      // STEP 3: Join new room
+      console.log('🎯 joinRoom: Joining new room:', roomId);
+      const { error: joinError } = await supabase
+        .from('user_room_memberships')
+        .insert({
+          user_id: user.id,
+          room_id: roomId
+        });
+
+      if (joinError) {
+        console.error('❌ joinRoom: Error joining new room:', joinError);
+        alert('Error joining room: ' + joinError.message);
         return;
       }
+      console.log('✅ joinRoom: Successfully joined new room');
 
-      console.log('✅ User room memberships:', userRooms);
+      // STEP 4: Update slots for NEW room
+      console.log('🔄 joinRoom: Updating slots for new room:', roomId);
+      await updateRoomSlots(roomId);
 
-      if (userRooms && userRooms.length > 0) {
-        setCurrentUserRoom(userRooms[0].room_id);
-        console.log('✅ Current user room set to:', userRooms[0].room_id);
-      } else {
-        setCurrentUserRoom(null);
-        console.log('✅ User is not in any room');
-      }
-    } catch (err) {
-      console.error('❌ fetchCurrentUserRoom error:', err);
+      // STEP 5: Refresh all data
+      console.log('🔄 joinRoom: Refreshing room data...');
+      await fetchRooms();
+      await fetchCurrentUserRoom();
+
+      console.log('✅ joinRoom: Process completed successfully');
+
+    } catch (error) {
+      console.error('❌ joinRoom: Unexpected error:', error);
+      alert('Error joining room: ' + error.message);
     }
   };
+  // Add these functions to App.jsx (around line 600, before joinRoom)
 
+  // Fetch user's current room
+  const fetchCurrentUserRoom = async (currentUser = user) => {
+  const userToCheck = currentUser || user;
+  
+  if (!userToCheck) {
+    console.log('❌ fetchCurrentUserRoom: No user provided');
+    setCurrentUserRoom(null);
+    return null;
+  }
+
+  try {
+    console.log('🔄 fetchCurrentUserRoom: Fetching for user:', userToCheck.id, userToCheck.email);
+    const { data: userRooms, error } = await supabase
+      .from('user_room_memberships')
+      .select('room_id')
+      .eq('user_id', userToCheck.id);
+
+    if (error) {
+      console.error('❌ Error fetching user rooms:', error);
+      setCurrentUserRoom(null);
+      return null;
+    }
+
+    console.log('✅ User room memberships found:', userRooms);
+
+    if (userRooms && userRooms.length > 0) {
+      const roomId = userRooms[0].room_id;
+      setCurrentUserRoom(roomId);
+      console.log('✅ Current user room set to:', roomId);
+      return roomId;
+    } else {
+      setCurrentUserRoom(null);
+      console.log('✅ User is not in any room');
+      return null;
+    }
+  } catch (err) {
+    console.error('❌ fetchCurrentUserRoom error:', err);
+    setCurrentUserRoom(null);
+    return null;
+  }
+};
+
+  // Fetch all public rooms
   // Fetch all public rooms
   const fetchRooms = async () => {
     try {
@@ -393,8 +417,10 @@ const joinRoom = async (roomId) => {
 
       console.log('✅ Rooms fetched:', data?.length || 0);
       setRooms(data || []);
+      return data || []; // RETURN the data
     } catch (e) {
       console.error("❌ fetchRooms error", e);
+      return [];
     }
   };
 
@@ -692,47 +718,47 @@ const joinRoom = async (roomId) => {
     isSigningOutRef.current = true;
 
     // Leave room before signing out - ADD THIS
-   if (currentUserRoom) {
-  console.log('🚪 Leaving room before sign out:', currentUserRoom);
-  try {
-    const { error: leaveError } = await supabase
-      .from('user_room_memberships')
-      .delete()
-      .eq('user_id', user.id);
-    
-    if (leaveError) {
-      console.error('❌ Error leaving room on sign out:', leaveError);
-    } else {
-      console.log('✅ Successfully left room on sign out');
-      
-      // Update room slots count for the room being left
-      const { data: members, error: countError } = await supabase
-        .from('user_room_memberships')
-        .select('id')
-        .eq('room_id', currentUserRoom);
-      
-      if (countError) {
-        console.error('❌ Error counting room members on sign out:', countError);
-      } else {
-        const memberCount = members?.length || 0;
-        console.log('📊 Room member count after sign out:', memberCount);
-        
-        const { error: updateError } = await supabase
-          .from('chat_rooms')
-          .update({ current_slots: memberCount })
-          .eq('id', currentUserRoom);
-        
-        if (updateError) {
-          console.error('❌ Error updating room slots on sign out:', updateError);
+    if (currentUserRoom) {
+      console.log('🚪 Leaving room before sign out:', currentUserRoom);
+      try {
+        const { error: leaveError } = await supabase
+          .from('user_room_memberships')
+          .delete()
+          .eq('user_id', user.id);
+
+        if (leaveError) {
+          console.error('❌ Error leaving room on sign out:', leaveError);
         } else {
-          console.log('✅ Room slots updated on sign out to:', memberCount);
+          console.log('✅ Successfully left room on sign out');
+
+          // Update room slots count for the room being left
+          const { data: members, error: countError } = await supabase
+            .from('user_room_memberships')
+            .select('id')
+            .eq('room_id', currentUserRoom);
+
+          if (countError) {
+            console.error('❌ Error counting room members on sign out:', countError);
+          } else {
+            const memberCount = members?.length || 0;
+            console.log('📊 Room member count after sign out:', memberCount);
+
+            const { error: updateError } = await supabase
+              .from('chat_rooms')
+              .update({ current_slots: memberCount })
+              .eq('id', currentUserRoom);
+
+            if (updateError) {
+              console.error('❌ Error updating room slots on sign out:', updateError);
+            } else {
+              console.log('✅ Room slots updated on sign out to:', memberCount);
+            }
+          }
         }
+      } catch (err) {
+        console.error('❌ Error during room leave on sign out:', err);
       }
     }
-  } catch (err) {
-    console.error('❌ Error during room leave on sign out:', err);
-  }
-}
 
     await sendSystemMessage(`${user.email} left the chat`, 'leave');
 
@@ -755,47 +781,47 @@ const joinRoom = async (roomId) => {
   }
 
   // Add this helper function to App.jsx
-// Replace the updateRoomSlots function in App.jsx with this debug version
-// Replace the updateRoomSlots function in App.jsx with this improved version
-const updateRoomSlots = async (roomId) => {
-  if (!roomId) {
-    console.log('❌ updateRoomSlots: No roomId provided');
-    return;
-  }
-  
-  try {
-    console.log(`🔄 updateRoomSlots: Starting for room ${roomId}`);
-    
-    // Count members in this room
-    const { data: members, error } = await supabase
-      .from('user_room_memberships')
-      .select('id, user_id')
-      .eq('room_id', roomId);
-    
-    if (error) {
-      console.error('❌ updateRoomSlots: Error counting members:', error);
+  // Replace the updateRoomSlots function in App.jsx with this debug version
+  // Replace the updateRoomSlots function in App.jsx with this improved version
+  const updateRoomSlots = async (roomId) => {
+    if (!roomId) {
+      console.log('❌ updateRoomSlots: No roomId provided');
       return;
     }
-    
-    const memberCount = members?.length || 0;
-    console.log(`📊 updateRoomSlots: Room ${roomId} has ${memberCount} members`);
-    
-    // Update the room's current_slots
-    const { error: updateError } = await supabase
-      .from('chat_rooms')
-      .update({ current_slots: memberCount })
-      .eq('id', roomId);
-    
-    if (updateError) {
-      console.error('❌ updateRoomSlots: Error updating database:', updateError);
-    } else {
-      console.log(`✅ updateRoomSlots: Successfully updated room ${roomId} to ${memberCount} slots`);
+
+    try {
+      console.log(`🔄 updateRoomSlots: Starting for room ${roomId}`);
+
+      // Count members in this room
+      const { data: members, error } = await supabase
+        .from('user_room_memberships')
+        .select('id, user_id')
+        .eq('room_id', roomId);
+
+      if (error) {
+        console.error('❌ updateRoomSlots: Error counting members:', error);
+        return;
+      }
+
+      const memberCount = members?.length || 0;
+      console.log(`📊 updateRoomSlots: Room ${roomId} has ${memberCount} members`);
+
+      // Update the room's current_slots
+      const { error: updateError } = await supabase
+        .from('chat_rooms')
+        .update({ current_slots: memberCount })
+        .eq('id', roomId);
+
+      if (updateError) {
+        console.error('❌ updateRoomSlots: Error updating database:', updateError);
+      } else {
+        console.log(`✅ updateRoomSlots: Successfully updated room ${roomId} to ${memberCount} slots`);
+      }
+
+    } catch (err) {
+      console.error('❌ updateRoomSlots: Unexpected error:', err);
     }
-    
-  } catch (err) {
-    console.error('❌ updateRoomSlots: Unexpected error:', err);
-  }
-};
+  };
 
   // Add this function to App.jsx (around line 570)
   const reloadAllFriendshipData = async () => {
@@ -849,7 +875,7 @@ const updateRoomSlots = async (roomId) => {
     }
   };
 
-  // Movement: current user updates position every 500ms
+  // Movement: current user updates position every 3000ms
   useEffect(() => {
     if (!user) return;
     const email = (user.email || "").toLowerCase();
@@ -884,7 +910,7 @@ const updateRoomSlots = async (roomId) => {
           return { ...u, current_x: nx, current_y: ny };
         });
       });
-    }, 500);
+    }, 3000);
 
     return () => clearInterval(id);
   }, [user]);

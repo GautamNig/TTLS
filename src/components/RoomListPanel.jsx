@@ -138,8 +138,6 @@ export default function RoomListPanel({ user }) {
 
       // STEP 4: Refresh the room list to show updated data
       await fetchRooms();
-      alert('Joined room successfully! 🎉');
-
     } catch (error) {
       console.error('❌ Join room exception:', error);
       alert('Error joining room: ' + error.message);

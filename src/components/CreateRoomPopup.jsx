@@ -60,7 +60,6 @@ export default function CreateRoomPopup({ user, onCreateRoom, onClose }) {
         onCreateRoom(roomData);
       }
       
-      alert(`Room "${roomName}" created successfully! 🎉`);
       onClose();
       
     } catch (error) {
