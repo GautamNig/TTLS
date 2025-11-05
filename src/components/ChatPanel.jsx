@@ -1,25 +1,75 @@
-// src/components/ChatPanel.jsx - WITH INLINE STYLES
+// src/components/ChatPanel.jsx - UPDATED FOR ROOMS
 import React, { useEffect, useRef, useState } from "react";
+import { supabase } from "../supabaseClient"; // ADD THIS IMPORT
 
-export default function ChatPanel({ user, messages = [], onSend = null }) {
+export default function ChatPanel({ user, room, onSendMessage = null }) {
   const [text, setText] = useState("");
+  const [roomMessages, setRoomMessages] = useState([]); // CHANGED FROM messages
   const messagesEndRef = useRef(null);
+
+  // Fetch room messages when room changes
+  useEffect(() => {
+    if (!room) {
+      setRoomMessages([]);
+      return;
+    }
+
+    const fetchRoomMessages = async () => {
+      try {
+        console.log('🔄 Fetching room messages for:', room.name);
+        const { data, error } = await supabase
+          .from('room_messages')
+          .select('*')
+          .eq('room_id', room.id)
+          .order('created_at', { ascending: true });
+
+        if (error) throw error;
+        setRoomMessages(data || []);
+        console.log('✅ Room messages fetched:', data?.length || 0);
+      } catch (e) {
+        console.error("fetchRoomMessages error", e);
+      }
+    };
+
+    fetchRoomMessages();
+
+    // Real-time subscription for room messages
+    const roomChannel = supabase
+      .channel('room_messages')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'room_messages',
+          filter: `room_id=eq.${room.id}`
+        },
+        (payload) => {
+          console.log('🔄 New room message:', payload.new);
+          setRoomMessages(prev => [...prev, payload.new]);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(roomChannel);
+    };
+  }, [room]); // DEPENDS ON ROOM NOW
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [roomMessages]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!text.trim()) return;
+    if (!text.trim() || !room) return;
     
-    if (typeof onSend === "function") {
-      await onSend(text.trim());
+    if (typeof onSendMessage === "function") {
+      await onSendMessage(text.trim());
     }
     setText("");
   };
 
-  // Format time for display
   const formatTime = (timestamp) => {
     return new Date(timestamp).toLocaleTimeString([], { 
       hour: '2-digit', 
@@ -27,10 +77,32 @@ export default function ChatPanel({ user, messages = [], onSend = null }) {
     });
   };
 
-  // Get username from email (everything before @)
   const getUsername = (email) => {
     return email.split('@')[0];
   };
+
+  // Show different UI when not in a room
+  if (!room) {
+    return (
+      <div style={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100%',
+        width: '100%',
+        background: 'linear-gradient(to bottom, #0f172a 0%, #581c87 100%)',
+        color: 'white',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontFamily: 'sans-serif'
+      }}>
+        <div style={{ fontSize: '48px', marginBottom: '16px' }}>🌌</div>
+        <div style={{ fontSize: '18px', marginBottom: '8px' }}>Welcome to Star Chat</div>
+        <div style={{ fontSize: '14px', color: 'rgba(255,255,255,0.6)' }}>
+          Join a room to start chatting
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{
@@ -43,7 +115,7 @@ export default function ChatPanel({ user, messages = [], onSend = null }) {
       fontFamily: 'sans-serif'
     }}>
       
-      {/* Header */}
+      {/* Room Header - UPDATED */}
       <div style={{
         flexShrink: 0,
         height: '100px',
@@ -56,8 +128,10 @@ export default function ChatPanel({ user, messages = [], onSend = null }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <div style={{ fontSize: '24px' }}>💬</div>
           <div>
-            <div style={{ fontWeight: '600', fontSize: '18px' }}>Live Chat</div>
-            <div style={{ fontSize: '12px', opacity: 0.6 }}>Connected as {getUsername(user?.email)}</div>
+            <div style={{ fontWeight: '600', fontSize: '18px' }}>{room.name}</div>
+            <div style={{ fontSize: '12px', opacity: 0.6 }}>
+              Room Chat • {room.current_slots} members • Created by {getUsername(room.user_positions?.email || room.creator_email || 'Unknown')}
+            </div>
           </div>
         </div>
       </div>
@@ -69,16 +143,16 @@ export default function ChatPanel({ user, messages = [], onSend = null }) {
         padding: '16px',
         background: 'linear-gradient(to bottom, rgba(15, 23, 42, 0.5), rgba(88, 28, 135, 0.3))'
       }}>
-        {(!messages || messages.length === 0) && (
+        {roomMessages.length === 0 && (
           <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.6)', marginTop: '32px' }}>
-            <div style={{ fontSize: '18px', marginBottom: '8px' }}>🌌 Welcome to the Star Chat!</div>
-            <div style={{ fontSize: '14px' }}>Start a conversation with other stargazers...</div>
+            <div style={{ fontSize: '18px', marginBottom: '8px' }}>🌟 Welcome to {room.name}!</div>
+            <div style={{ fontSize: '14px' }}>Start the conversation...</div>
           </div>
         )}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          {messages.map((m) => {
-            // System messages (join/leave/info)
+          {roomMessages.map((m) => {
+            // System messages
             if (m.type !== 'user') {
               return (
                 <div key={m.id} style={{ textAlign: 'center' }}>
@@ -98,7 +172,7 @@ export default function ChatPanel({ user, messages = [], onSend = null }) {
               );
             }
 
-            // User messages - WhatsApp style
+            // User messages
             const isCurrentUser = m.sender_email === user?.email;
             const username = getUsername(m.sender_email);
             
@@ -163,30 +237,6 @@ export default function ChatPanel({ user, messages = [], onSend = null }) {
                     }}>
                       {formatTime(m.created_at)}
                     </div>
-
-                    {/* Message tail */}
-                    {!isCurrentUser && (
-                      <div style={{
-                        position: 'absolute',
-                        left: '-4px',
-                        bottom: '0',
-                        width: '12px',
-                        height: '12px',
-                        background: '#374151',
-                        transform: 'rotate(45deg)'
-                      }}></div>
-                    )}
-                    {isCurrentUser && (
-                      <div style={{
-                        position: 'absolute',
-                        right: '-4px',
-                        bottom: '0',
-                        width: '12px',
-                        height: '12px',
-                        background: '#3B82F6',
-                        transform: 'rotate(45deg)'
-                      }}></div>
-                    )}
                   </div>
 
                   {/* "You" label for current user */}
@@ -213,7 +263,7 @@ export default function ChatPanel({ user, messages = [], onSend = null }) {
       {/* Input Area */}
       <div style={{
         flexShrink: 0,
-        minHeight: '90px',
+        minHeight: '80px',
         borderTop: '1px solid rgba(255,255,255,0.1)',
         background: 'linear-gradient(to right, rgba(0, 0, 0, 0.6), rgba(76, 29, 149, 0.4))'
       }}>
@@ -231,7 +281,8 @@ export default function ChatPanel({ user, messages = [], onSend = null }) {
           <input
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder="Type a message..."
+            placeholder={room ? `Message in ${room.name}...` : "Join a room to chat..."}
+            disabled={!room}
             style={{
               flex: 1,
               padding: '12px 16px',
@@ -239,35 +290,26 @@ export default function ChatPanel({ user, messages = [], onSend = null }) {
               background: 'rgba(0, 0, 0, 0.4)',
               color: 'white',
               border: '1px solid rgba(255,255,255,0.1)',
-              outline: 'none'
+              outline: 'none',
+              opacity: room ? 1 : 0.6
             }}
           />
           <button
             type="submit"
-            disabled={!text.trim()}
+            disabled={!text.trim() || !room}
             style={{
               padding: '12px 24px',
-              background: !text.trim() 
+              background: (!text.trim() || !room)
                 ? 'linear-gradient(135deg, #4B5563, #374151)'
                 : 'linear-gradient(135deg, #3B82F6, #7C3AED)',
               color: 'white',
               fontWeight: '600',
               borderRadius: '12px',
               border: 'none',
-              cursor: !text.trim() ? 'not-allowed' : 'pointer',
+              cursor: (!text.trim() || !room) ? 'not-allowed' : 'pointer',
               boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
               transition: 'all 0.2s',
-              opacity: !text.trim() ? 0.5 : 1
-            }}
-            onMouseOver={(e) => {
-              if (text.trim()) {
-                e.target.style.transform = 'scale(1.05)';
-              }
-            }}
-            onMouseOut={(e) => {
-              if (text.trim()) {
-                e.target.style.transform = 'scale(1)';
-              }
+              opacity: (!text.trim() || !room) ? 0.5 : 1
             }}
           >
             Send

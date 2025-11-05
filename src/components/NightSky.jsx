@@ -1,11 +1,11 @@
-// In NightSky.jsx - Add import and component
+// In NightSky.jsx - update the component props and ChatPanel usage
 import React, { useState } from "react";
 import ModernHeader from "./ModernHeader";
 import GlowingPixel from "./GlowingPixel";
 import ChatPanel from "./ChatPanel";
 import PrivateChatPopup from "./PrivateChatPopup";
 import CreateRoomPopup from "./CreateRoomPopup";
-import RoomListPanel from "./RoomListPanel"; // ADD THIS IMPORT
+import RoomListPanel from "./RoomListPanel";
 
 export default function NightSky({
   user,
@@ -21,10 +21,15 @@ export default function NightSky({
   friends = [],
   privateMessages = {},
   onSendPrivateMessage,
-  onMarkMessagesAsRead
+  onMarkMessagesAsRead,
+  currentUserRoom = null, // RECEIVE THIS
+  rooms = [], // RECEIVE THIS
+  onJoinRoom, // RECEIVE THIS
+  supabase,
+  fetchRooms // RECEIVE THIS
 }) {
   const [showCreateRoom, setShowCreateRoom] = useState(false);
-  const [showRoomList, setShowRoomList] = useState(false); // ADD THIS STATE
+  const [showRoomList, setShowRoomList] = useState(false);
 
   return (
     <div style={{
@@ -91,7 +96,7 @@ export default function NightSky({
           <span>Create Room</span>
         </button>
 
-        {/* NEW: Show Rooms Button */}
+        {/* Show Rooms Button */}
         <button
           style={{
             position: 'fixed',
@@ -124,18 +129,47 @@ export default function NightSky({
             onClose={() => setShowCreateRoom(false)}
             onCreateRoom={(roomData) => {
               console.log('🎉 Room created:', roomData);
-              // We'll refresh room list later
+              setShowRoomList(true);
             }}
           />
         )}
 
-        {/* NEW: Room List Panel */}
+        {/* Room List Panel */}
         {showRoomList && (
-          <RoomListPanel user={user} />
+           <RoomListPanel 
+    user={user}
+    rooms={rooms}
+    currentUserRoom={currentUserRoom}
+    onJoinRoom={onJoinRoom}
+    onRefresh={() => {
+      // Trigger refresh from App.jsx
+      if (typeof fetchRooms === 'function') {
+        fetchRooms();
+      }
+    }}
+  />
+        )}
+
+        {/* Current Room Status Display */}
+        {currentUserRoom && (
+          <div style={{
+            position: 'fixed',
+            top: '80px',
+            left: '20px',
+            background: 'rgba(16, 185, 129, 0.2)',
+            border: '1px solid rgba(16, 185, 129, 0.4)',
+            borderRadius: '8px',
+            padding: '8px 12px',
+            color: '#10B981',
+            fontSize: '12px',
+            zIndex: 999
+          }}>
+            ✅ You are in: {rooms.find(r => r.id === currentUserRoom)?.name || 'a room'}
+          </div>
         )}
       </div>
 
-      {/* RIGHT SIDE - Public Chat Panel - UNCHANGED */}
+      {/* RIGHT SIDE - Chat Panel (Now Room Chat) */}
       <div style={{
         height: '100vh',
         display: 'flex',
@@ -143,8 +177,25 @@ export default function NightSky({
       }} className="bg-black/60 border-l border-white/10">
         <ChatPanel
           user={user}
-          messages={messages}
-          onSend={onSendMessage}
+          room={currentUserRoom ? rooms.find(r => r.id === currentUserRoom) : null}
+          onSendMessage={async (content) => {
+            if (!user || !currentUserRoom || !content.trim()) return;
+            
+            try {
+              await supabase
+                .from('room_messages')
+                .insert({
+                  room_id: currentUserRoom,
+                  sender_id: user.id,
+                  sender_email: user.email,
+                  content: content.trim(),
+                  type: 'user',
+                  created_at: new Date().toISOString()
+                });
+            } catch (error) {
+              console.error('Error sending room message:', error);
+            }
+          }}
         />
       </div>
     </div>

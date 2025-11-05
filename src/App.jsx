@@ -14,6 +14,8 @@ export default function App() {
   const [followingList, setFollowingList] = useState([]);
   const [recentFriendships, setRecentFriendships] = useState([]);
   const [friends, setFriends] = useState([]); // Mutual friends
+  const [rooms, setRooms] = useState([]);
+  const [currentUserRoom, setCurrentUserRoom] = useState(null);
 
   const isSigningOutRef = useRef(false);
   const driftRef = useRef({});
@@ -35,18 +37,75 @@ export default function App() {
       if (event === "SIGNED_IN" && session?.user) {
         setUser(session.user);
         markUserOnline(session.user).catch((e) => console.error(e));
+
+        // Add proper sequencing for room data loading
+        setTimeout(async () => {
+          console.log('🔄 Loading user data after sign in...');
+
+          // First load basic data
+          await fetchFriends();
+
+          // Then load room data with proper sequencing
+          await fetchRooms();
+          await fetchCurrentUserRoom();
+
+          console.log('✅ All user data loaded after sign in');
+
+          // Debug: Check if user should be in a room
+          if (currentUserRoom) {
+            console.log('🎯 User should be seeing room chat for:', currentUserRoom);
+          } else {
+            console.log('🎯 User is not in any room');
+          }
+        }, 1500); // Slightly longer delay to ensure everything is ready
       } else if (event === "SIGNED_OUT") {
+        console.log('🔐 User signed out, clearing all states');
         setUser(null);
         setUsers([]);
         setMessages([]);
         setPrivateMessages({});
         setFriends([]);
+        setFollowingList([]);
+        setRooms([]); // ADD THIS
+        setCurrentUserRoom(null); // ADD THIS
       }
     });
 
     return () => sub.subscription.unsubscribe();
   }, []);
 
+  // Add this useEffect to App.jsx (with other useEffects)
+  // Real-time subscription for room memberships
+  useEffect(() => {
+    if (!user) return;
+
+    const membershipChannel = supabase
+      .channel('user_room_memberships_changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'user_room_memberships',
+          filter: `user_id=eq.${user.id}`
+        },
+        (payload) => {
+          console.log('🔄 User room membership changed:', payload);
+          if (payload.eventType === 'INSERT') {
+            setCurrentUserRoom(payload.new.room_id);
+          } else if (payload.eventType === 'DELETE') {
+            setCurrentUserRoom(null);
+          }
+          // Refresh rooms to update slot counts
+          fetchRooms();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(membershipChannel);
+    };
+  }, [user]);
   // Realtime subscription for user positions
   useEffect(() => {
     const channel = supabase
@@ -123,17 +182,17 @@ export default function App() {
         },
         async (payload) => {
           const newMessage = payload.new;
-          
+
           // Check if this message is for the current user
           if (newMessage.receiver_id === user.id || newMessage.sender_id === user.id) {
             const friendId = newMessage.sender_id === user.id ? newMessage.receiver_id : newMessage.sender_id;
-            
+
             // If the message is for the current user and they're viewing the chat, mark as read immediately
             if (newMessage.receiver_id === user.id) {
               // Check if we're currently viewing this friend's chat
               // We'll handle this in the PrivateChatPopup component
             }
-            
+
             setPrivateMessages(prev => ({
               ...prev,
               [friendId]: [...(prev[friendId] || []), newMessage]
@@ -216,6 +275,129 @@ export default function App() {
     return () => clearInterval(cleanupInterval);
   }, [user]);
 
+  // Add this function to App.jsx
+  // In App.jsx, update the joinRoom function
+// Simplified joinRoom using the helper
+// Replace the joinRoom function in App.jsx with this version
+// Update the joinRoom function in App.jsx to update BOTH old and new rooms
+const joinRoom = async (roomId) => {
+  if (!user) return;
+  
+  try {
+    console.log('🔄 joinRoom: Starting process for room:', roomId);
+    console.log('🔍 joinRoom: Current user:', user.id, user.email);
+
+    // STEP 1: Get current room membership BEFORE any changes
+    const { data: currentMemberships, error: currentError } = await supabase
+      .from('user_room_memberships')
+      .select('room_id')
+      .eq('user_id', user.id);
+    
+    const oldRoomId = currentMemberships && currentMemberships.length > 0 ? currentMemberships[0].room_id : null;
+    console.log('📊 joinRoom: User currently in room:', oldRoomId);
+
+    // STEP 2: Leave current room if exists
+    if (oldRoomId) {
+      console.log('🚪 joinRoom: Leaving old room:', oldRoomId);
+      const { error: leaveError } = await supabase
+        .from('user_room_memberships')
+        .delete()
+        .eq('user_id', user.id);
+      
+      if (leaveError) {
+        console.error('❌ joinRoom: Error leaving old room:', leaveError);
+      } else {
+        console.log('✅ joinRoom: Successfully left old room');
+        
+        // Update slots for OLD room immediately after leaving
+        console.log('🔄 joinRoom: Updating slots for old room:', oldRoomId);
+        await updateRoomSlots(oldRoomId);
+      }
+    }
+
+    // STEP 3: Join new room
+    console.log('🎯 joinRoom: Joining new room:', roomId);
+    const { error: joinError } = await supabase
+      .from('user_room_memberships')
+      .insert({
+        user_id: user.id,
+        room_id: roomId
+      });
+    
+    if (joinError) {
+      console.error('❌ joinRoom: Error joining new room:', joinError);
+      alert('Error joining room: ' + joinError.message);
+      return;
+    }
+    console.log('✅ joinRoom: Successfully joined new room');
+
+    // STEP 4: Update slots for NEW room
+    console.log('🔄 joinRoom: Updating slots for new room:', roomId);
+    await updateRoomSlots(roomId);
+
+    // STEP 5: Refresh all data
+    console.log('🔄 joinRoom: Refreshing room data...');
+    await fetchRooms();
+    await fetchCurrentUserRoom();
+    
+    console.log('✅ joinRoom: Process completed successfully');
+    
+  } catch (error) {
+    console.error('❌ joinRoom: Unexpected error:', error);
+    alert('Error joining room: ' + error.message);
+  }
+};
+  // Add these functions to App.jsx (around line 600, before joinRoom)
+
+  // Fetch user's current room
+  const fetchCurrentUserRoom = async () => {
+    if (!user) return;
+
+    try {
+      console.log('🔄 Fetching current user room...');
+      const { data: userRooms, error } = await supabase
+        .from('user_room_memberships')
+        .select('room_id')
+        .eq('user_id', user.id);
+
+      if (error) {
+        console.error('❌ Error fetching user rooms:', error);
+        return;
+      }
+
+      console.log('✅ User room memberships:', userRooms);
+
+      if (userRooms && userRooms.length > 0) {
+        setCurrentUserRoom(userRooms[0].room_id);
+        console.log('✅ Current user room set to:', userRooms[0].room_id);
+      } else {
+        setCurrentUserRoom(null);
+        console.log('✅ User is not in any room');
+      }
+    } catch (err) {
+      console.error('❌ fetchCurrentUserRoom error:', err);
+    }
+  };
+
+  // Fetch all public rooms
+  const fetchRooms = async () => {
+    try {
+      console.log('🔄 Fetching rooms...');
+      const { data, error } = await supabase
+        .from('chat_rooms')
+        .select('*')
+        .eq('is_public', true)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+
+      console.log('✅ Rooms fetched:', data?.length || 0);
+      setRooms(data || []);
+    } catch (e) {
+      console.error("❌ fetchRooms error", e);
+    }
+  };
+
   async function fetchAllUsers() {
     try {
       const { data, error } = await supabase.from("user_positions").select("*");
@@ -228,59 +410,59 @@ export default function App() {
 
   // Fetch mutual friends
   async function fetchFriends() {
-  if (!user) return;
-  console.log('🔄 fetchFriends called for user:', user.id, user.email);
-  
-  try {
-    const { data, error } = await supabase.rpc('get_mutual_friends', { user_uuid: user.id });
-    
-    if (error) {
-      console.error('❌ fetchFriends RPC error:', error);
-      throw error;
-    }
-    
-    console.log('✅ fetchFriends result:', {
-      user: user.id,
-      friendsCount: data?.length || 0,
-      friends: data
-    });
-    
-    setFriends(data || []);
-    
-    // Fetch existing private messages for each friend
-    if (data && data.length > 0) {
-      data.forEach(friend => {
-        console.log('📨 Fetching private messages for friend:', friend.friend_id);
-        fetchPrivateMessages(friend.friend_id);
+    if (!user) return;
+    console.log('🔄 fetchFriends called for user:', user.id, user.email);
+
+    try {
+      const { data, error } = await supabase.rpc('get_mutual_friends', { user_uuid: user.id });
+
+      if (error) {
+        console.error('❌ fetchFriends RPC error:', error);
+        throw error;
+      }
+
+      console.log('✅ fetchFriends result:', {
+        user: user.id,
+        friendsCount: data?.length || 0,
+        friends: data
       });
-    } else {
-      console.log('ℹ️ No friends found for user');
+
+      setFriends(data || []);
+
+      // Fetch existing private messages for each friend
+      if (data && data.length > 0) {
+        data.forEach(friend => {
+          console.log('📨 Fetching private messages for friend:', friend.friend_id);
+          fetchPrivateMessages(friend.friend_id);
+        });
+      } else {
+        console.log('ℹ️ No friends found for user');
+      }
+
+    } catch (err) {
+      console.error("fetchFriends error:", err);
     }
-    
-  } catch (err) {
-    console.error("fetchFriends error:", err);
   }
-}
 
   async function fetchPrivateMessages(friendId) {
-  if (!user) return;
-  try {
-    const { data, error } = await supabase
-      .from('private_messages')
-      .select('*')
-      .or(`and(sender_id.eq.${user.id},receiver_id.eq.${friendId}),and(sender_id.eq.${friendId},receiver_id.eq.${user.id})`)
-      .order('created_at', { ascending: true });
+    if (!user) return;
+    try {
+      const { data, error } = await supabase
+        .from('private_messages')
+        .select('*')
+        .or(`and(sender_id.eq.${user.id},receiver_id.eq.${friendId}),and(sender_id.eq.${friendId},receiver_id.eq.${user.id})`)
+        .order('created_at', { ascending: true });
 
-    if (error) throw error;
-    
-    setPrivateMessages(prev => ({
-      ...prev,
-      [friendId]: data || []
-    }));
-  } catch (err) {
-    console.error("fetchPrivateMessages error:", err);
+      if (error) throw error;
+
+      setPrivateMessages(prev => ({
+        ...prev,
+        [friendId]: data || []
+      }));
+    } catch (err) {
+      console.error("fetchPrivateMessages error:", err);
+    }
   }
-}
 
   // System message function
   const sendSystemMessage = async (content, type = 'info') => {
@@ -432,81 +614,125 @@ export default function App() {
 
   // === FOLLOW / FRIENDSHIP SYSTEM ===
   // Update the handleFollow function in App.jsx
-// Replace the handleFollow function in App.jsx
-async function handleFollow(targetUserId) {
-  if (!user) return;
+  // Replace the handleFollow function in App.jsx
+  async function handleFollow(targetUserId) {
+    if (!user) return;
 
-  try {
-    console.log('🔄 Attempting to follow user:', targetUserId);
-    
-    const { error } = await supabase.rpc('follow_user', {
-      p_follower: user.id,
-      p_followee: targetUserId,
-    });
-    
-    if (error) {
-      console.error("❌ Supabase RPC follow_user error", error);
-      // Try direct insert as fallback
-      await followUserDirectly(targetUserId);
-      return;
-    }
-    
-    console.log("✅ follow_user executed successfully");
+    try {
+      console.log('🔄 Attempting to follow user:', targetUserId);
 
-    // Check if this created a mutual friendship
-    const { data, error: checkErr } = await supabase.rpc('check_friendship', {
-      p_user1: user.id,
-      p_user2: targetUserId,
-    });
-
-    if (checkErr) {
-      console.error("❌ check_friendship error", checkErr);
-    } else if (data === true) {
-      console.log("🎉 Friendship formed! Creating friendship event");
-      await supabase.from("friendship_events").insert({
-        user1: user.id,
-        user2: targetUserId,
+      const { error } = await supabase.rpc('follow_user', {
+        p_follower: user.id,
+        p_followee: targetUserId,
       });
-      // Refresh friends list when new friendship is formed
-      fetchFriends();
-    }
 
-    await fetchFollowingList();
+      if (error) {
+        console.error("❌ Supabase RPC follow_user error", error);
+        // Try direct insert as fallback
+        await followUserDirectly(targetUserId);
+        return;
+      }
 
-  } catch (e) {
-    console.error('❌ handleFollow error', e);
-  }
-}
+      console.log("✅ follow_user executed successfully");
 
-// Add this function to App.jsx
-async function followUserDirectly(targetUserId) {
-  try {
-    console.log('🔄 Trying direct follow insert for:', targetUserId);
-    const { error } = await supabase
-      .from('user_follows')
-      .insert({
-        follower_id: user.id,
-        followee_id: targetUserId
-      })
-      .select();
-    
-    if (error) {
-      console.error('❌ Direct follow insert error:', error);
-    } else {
-      console.log('✅ Direct follow insert successful');
+      // Check if this created a mutual friendship
+      const { data, error: checkErr } = await supabase.rpc('check_friendship', {
+        p_user1: user.id,
+        p_user2: targetUserId,
+      });
+
+      if (checkErr) {
+        console.error("❌ check_friendship error", checkErr);
+      } else if (data === true) {
+        console.log("🎉 Friendship formed! Creating friendship event");
+        await supabase.from("friendship_events").insert({
+          user1: user.id,
+          user2: targetUserId,
+        });
+        // Refresh friends list when new friendship is formed
+        fetchFriends();
+      }
+
       await fetchFollowingList();
+
+    } catch (e) {
+      console.error('❌ handleFollow error', e);
     }
-  } catch (err) {
-    console.error('❌ followUserDirectly error:', err);
   }
-}
+
+  // Add this function to App.jsx
+  async function followUserDirectly(targetUserId) {
+    try {
+      console.log('🔄 Trying direct follow insert for:', targetUserId);
+      const { error } = await supabase
+        .from('user_follows')
+        .insert({
+          follower_id: user.id,
+          followee_id: targetUserId
+        })
+        .select();
+
+      if (error) {
+        console.error('❌ Direct follow insert error:', error);
+      } else {
+        console.log('✅ Direct follow insert successful');
+        await fetchFollowingList();
+      }
+    } catch (err) {
+      console.error('❌ followUserDirectly error:', err);
+    }
+  }
 
   // Sign out sequence
+  // In App.jsx, update the handleSignOut function
   async function handleSignOut() {
     if (!user) return;
     const email = (user.email || "").toLowerCase();
     if (isSigningOutRef.current) return;
     isSigningOutRef.current = true;
+
+    // Leave room before signing out - ADD THIS
+   if (currentUserRoom) {
+  console.log('🚪 Leaving room before sign out:', currentUserRoom);
+  try {
+    const { error: leaveError } = await supabase
+      .from('user_room_memberships')
+      .delete()
+      .eq('user_id', user.id);
+    
+    if (leaveError) {
+      console.error('❌ Error leaving room on sign out:', leaveError);
+    } else {
+      console.log('✅ Successfully left room on sign out');
+      
+      // Update room slots count for the room being left
+      const { data: members, error: countError } = await supabase
+        .from('user_room_memberships')
+        .select('id')
+        .eq('room_id', currentUserRoom);
+      
+      if (countError) {
+        console.error('❌ Error counting room members on sign out:', countError);
+      } else {
+        const memberCount = members?.length || 0;
+        console.log('📊 Room member count after sign out:', memberCount);
+        
+        const { error: updateError } = await supabase
+          .from('chat_rooms')
+          .update({ current_slots: memberCount })
+          .eq('id', currentUserRoom);
+        
+        if (updateError) {
+          console.error('❌ Error updating room slots on sign out:', updateError);
+        } else {
+          console.log('✅ Room slots updated on sign out to:', memberCount);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('❌ Error during room leave on sign out:', err);
+  }
+}
 
     await sendSystemMessage(`${user.email} left the chat`, 'leave');
 
@@ -520,6 +746,7 @@ async function followUserDirectly(targetUserId) {
 
       setUser(null);
       setUsers((prev) => prev.map((u) => ((u.email || "").toLowerCase() === email ? { ...u, is_online: false, luminosity: 0.1 } : u)));
+      // Don't clear currentUserRoom here - let the SIGNED_OUT event handle it
     } catch (e) {
       console.error("handleSignOut failed", e);
     } finally {
@@ -527,57 +754,100 @@ async function followUserDirectly(targetUserId) {
     }
   }
 
-  // Add this function to App.jsx (around line 570)
-const reloadAllFriendshipData = async () => {
-  if (!user) return;
-  
-  console.log('🔄 Reloading all friendship data for user:', user.id);
+  // Add this helper function to App.jsx
+// Replace the updateRoomSlots function in App.jsx with this debug version
+// Replace the updateRoomSlots function in App.jsx with this improved version
+const updateRoomSlots = async (roomId) => {
+  if (!roomId) {
+    console.log('❌ updateRoomSlots: No roomId provided');
+    return;
+  }
   
   try {
-    // Clear existing state
-    setFriends([]);
-    setFollowingList([]);
+    console.log(`🔄 updateRoomSlots: Starting for room ${roomId}`);
     
-    // Wait a bit for state to clear
-    await new Promise(resolve => setTimeout(resolve, 100));
+    // Count members in this room
+    const { data: members, error } = await supabase
+      .from('user_room_memberships')
+      .select('id, user_id')
+      .eq('room_id', roomId);
     
-    // Reload all data
-    await fetchFollowingList();
-    await fetchFriends();
+    if (error) {
+      console.error('❌ updateRoomSlots: Error counting members:', error);
+      return;
+    }
     
-    console.log('✅ Friendship data reload complete');
+    const memberCount = members?.length || 0;
+    console.log(`📊 updateRoomSlots: Room ${roomId} has ${memberCount} members`);
+    
+    // Update the room's current_slots
+    const { error: updateError } = await supabase
+      .from('chat_rooms')
+      .update({ current_slots: memberCount })
+      .eq('id', roomId);
+    
+    if (updateError) {
+      console.error('❌ updateRoomSlots: Error updating database:', updateError);
+    } else {
+      console.log(`✅ updateRoomSlots: Successfully updated room ${roomId} to ${memberCount} slots`);
+    }
     
   } catch (err) {
-    console.error('❌ Error reloading friendship data:', err);
+    console.error('❌ updateRoomSlots: Unexpected error:', err);
   }
 };
+
+  // Add this function to App.jsx (around line 570)
+  const reloadAllFriendshipData = async () => {
+    if (!user) return;
+
+    console.log('🔄 Reloading all friendship data for user:', user.id);
+
+    try {
+      // Clear existing state
+      setFriends([]);
+      setFollowingList([]);
+
+      // Wait a bit for state to clear
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Reload all data
+      await fetchFollowingList();
+      await fetchFriends();
+
+      console.log('✅ Friendship data reload complete');
+
+    } catch (err) {
+      console.error('❌ Error reloading friendship data:', err);
+    }
+  };
 
   // In your App.jsx, add this function:
 
-// Function to mark private messages as read
-const markPrivateMessagesAsRead = async (friendId) => {
-  if (!user) return;
-  
-  try {
-    const { data, error } = await supabase
-      .from('private_messages')
-      .update({ is_read: true })
-      .eq('receiver_id', user.id)
-      .eq('sender_id', friendId)
-      .eq('is_read', false)
-      .select();
+  // Function to mark private messages as read
+  const markPrivateMessagesAsRead = async (friendId) => {
+    if (!user) return;
 
-    if (error) throw error;
-    
-    console.log(`✅ Marked ${data?.length || 0} messages as read for friend ${friendId}`);
-    
-    // Refetch private messages to update UI
-    await fetchPrivateMessages(friendId);
-    
-  } catch (err) {
-    console.error('Error marking messages as read:', err);
-  }
-};
+    try {
+      const { data, error } = await supabase
+        .from('private_messages')
+        .update({ is_read: true })
+        .eq('receiver_id', user.id)
+        .eq('sender_id', friendId)
+        .eq('is_read', false)
+        .select();
+
+      if (error) throw error;
+
+      console.log(`✅ Marked ${data?.length || 0} messages as read for friend ${friendId}`);
+
+      // Refetch private messages to update UI
+      await fetchPrivateMessages(friendId);
+
+    } catch (err) {
+      console.error('Error marking messages as read:', err);
+    }
+  };
 
   // Movement: current user updates position every 500ms
   useEffect(() => {
@@ -638,7 +908,7 @@ const markPrivateMessagesAsRead = async (friendId) => {
               prev.filter((f) => f.timestamp !== timestamp)
             );
           }, 5000);
-          
+
           // Refresh friends list when new friendship is detected
           fetchFriends();
         }
@@ -673,6 +943,11 @@ const markPrivateMessagesAsRead = async (friendId) => {
         privateMessages={privateMessages}
         onSendPrivateMessage={handleSendPrivateMessage}
         onMarkMessagesAsRead={markPrivateMessagesAsRead}
+        currentUserRoom={currentUserRoom}
+        rooms={rooms}
+        onJoinRoom={joinRoom}
+        supabase={supabase}
+        fetchRooms={fetchRooms}
       />
     </div>
   );

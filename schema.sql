@@ -92,14 +92,21 @@ CREATE POLICY "Authenticated can insert follows" ON user_follows
 -- =========================================
 
 -- Add a follow
+
 CREATE OR REPLACE FUNCTION follow_user(p_follower UUID, p_followee UUID)
 RETURNS VOID
 LANGUAGE plpgsql
 AS $$
 BEGIN
+  -- Check if users are different
+  IF p_follower = p_followee THEN
+    RAISE EXCEPTION 'Cannot follow yourself';
+  END IF;
+  
+  -- Insert the follow relationship (rely on foreign key constraints)
   INSERT INTO user_follows(follower_id, followee_id)
   VALUES (p_follower, p_followee)
-  ON CONFLICT DO NOTHING;
+  ON CONFLICT (follower_id, followee_id) DO NOTHING;
 END;
 $$;
 
@@ -117,6 +124,26 @@ AS $$
       AND a.followee_id = p_user2
   );
 $$;
+
+-- Add this function to your schema.sql
+CREATE OR REPLACE FUNCTION update_room_slots(room_id UUID)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    UPDATE chat_rooms 
+    SET current_slots = (
+        SELECT COUNT(*) 
+        FROM user_room_memberships 
+        WHERE room_id = chat_rooms.id
+    ),
+    updated_at = NOW()
+    WHERE id = room_id;
+END;
+$$;
+
+-- Grant execute permission
+GRANT EXECUTE ON FUNCTION update_room_slots(UUID) TO anon, authenticated;
 
 -- Enable RLS
 ALTER TABLE user_positions ENABLE ROW LEVEL SECURITY;
@@ -166,7 +193,9 @@ CREATE POLICY "Users can view their private messages" ON private_messages
 CREATE POLICY "Users can send private messages" ON private_messages
     FOR INSERT WITH CHECK (auth.uid() = sender_id);
 
--- Replace the get_mutual_friends function with this corrected version
+-- Replace the get_mutual_friends function with this SIMPLE version
+DROP FUNCTION IF EXISTS get_mutual_friends(UUID);
+
 CREATE OR REPLACE FUNCTION get_mutual_friends(user_uuid UUID)
 RETURNS TABLE (
     friend_id UUID,
@@ -175,23 +204,47 @@ RETURNS TABLE (
 ) 
 LANGUAGE sql
 AS $$
-    SELECT DISTINCT
+    -- Simple approach: Find pairs where both users follow each other
+    SELECT 
         CASE 
-            WHEN uf1.follower_id = user_uuid THEN uf1.followee_id 
-            ELSE uf1.follower_id 
+            WHEN uf1.follower_id = user_uuid THEN uf1.followee_id
+            ELSE uf1.follower_id
         END as friend_id,
         up.email as friend_email,
         up.is_online
     FROM user_follows uf1
     JOIN user_follows uf2 ON 
-        (uf1.follower_id = uf2.followee_id AND uf1.followee_id = uf2.follower_id)
-    JOIN user_positions up ON 
-        (CASE 
-            WHEN uf1.follower_id = user_uuid THEN uf1.followee_id 
-            ELSE uf1.follower_id 
-        END) = up.user_id
-    WHERE (uf1.follower_id = user_uuid OR uf1.followee_id = user_uuid)
-    AND uf1.follower_id != uf1.followee_id;
+        uf1.follower_id = uf2.followee_id 
+        AND uf1.followee_id = uf2.follower_id
+    JOIN user_positions up ON (
+        CASE 
+            WHEN uf1.follower_id = user_uuid THEN uf1.followee_id
+            ELSE uf1.follower_id
+        END
+    ) = up.user_id
+    WHERE (uf1.follower_id = user_uuid OR uf1.followee_id = user_uuid);
+$$;
+
+-- Add this to schema.sql for data consistency
+CREATE OR REPLACE FUNCTION cleanup_orphaned_user_data()
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- Delete follows where either user doesn't exist
+    DELETE FROM user_follows 
+    WHERE follower_id NOT IN (SELECT user_id FROM user_positions)
+       OR followee_id NOT IN (SELECT user_id FROM user_positions);
+    
+    -- Delete private messages where either user doesn't exist
+    DELETE FROM private_messages 
+    WHERE sender_id NOT IN (SELECT user_id FROM user_positions)
+       OR receiver_id NOT IN (SELECT user_id FROM user_positions);
+    
+    -- Delete chat messages where user doesn't exist
+    DELETE FROM chat_messages 
+    WHERE sender_id NOT IN (SELECT user_id FROM user_positions);
+END;
 $$;
 
 -- Functions for user management
@@ -280,5 +333,159 @@ BEGIN
 END;
 $$;
 
--- Grant execute permission
-GRANT EXECUTE ON FUNCTION mark_private_messages_as_read(UUID, UUID) TO anon, authenticated;
+-- Add this trigger function to automatically update room slots
+CREATE OR REPLACE FUNCTION update_room_slots_on_membership_change()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- Update slots when membership is inserted
+    IF TG_OP = 'INSERT' THEN
+        UPDATE chat_rooms 
+        SET current_slots = (
+            SELECT COUNT(*) 
+            FROM user_room_memberships 
+            WHERE room_id = NEW.room_id
+        )
+        WHERE id = NEW.room_id;
+    END IF;
+    
+    -- Update slots when membership is deleted  
+    IF TG_OP = 'DELETE' THEN
+        UPDATE chat_rooms 
+        SET current_slots = (
+            SELECT COUNT(*) 
+            FROM user_room_memberships 
+            WHERE room_id = OLD.room_id
+        )
+        WHERE id = OLD.room_id;
+    END IF;
+    
+    RETURN COALESCE(NEW, OLD);
+END;
+$$;
+
+
+
+-- =========================================
+-- ROOM SYSTEM TABLES (Phase 1 - Tables Only)
+-- =========================================
+
+-- Chat rooms table (optional feature - doesn't affect existing functionality)
+CREATE TABLE IF NOT EXISTS chat_rooms (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name TEXT NOT NULL,
+    description TEXT,
+    owner_id UUID NOT NULL REFERENCES user_positions(user_id) ON DELETE CASCADE,
+    max_slots INTEGER DEFAULT 10,
+    current_slots INTEGER DEFAULT 1,
+    is_public BOOLEAN DEFAULT true,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
+);
+
+-- User room membership table (optional feature)
+CREATE TABLE IF NOT EXISTS user_room_memberships (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES user_positions(user_id) ON DELETE CASCADE,
+    room_id UUID NOT NULL REFERENCES chat_rooms(id) ON DELETE CASCADE,
+    joined_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
+    UNIQUE(user_id, room_id)
+);
+
+-- Room messages table (optional feature)
+CREATE TABLE IF NOT EXISTS room_messages (
+    id BIGSERIAL PRIMARY KEY,
+    room_id UUID NOT NULL REFERENCES chat_rooms(id) ON DELETE CASCADE,
+    sender_id UUID NOT NULL REFERENCES user_positions(user_id) ON DELETE CASCADE,
+    sender_email TEXT NOT NULL,
+    content TEXT NOT NULL,
+    type TEXT DEFAULT 'user',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
+);
+
+
+-- Create the trigger
+DROP TRIGGER IF EXISTS room_slots_trigger ON user_room_memberships;
+CREATE TRIGGER room_slots_trigger
+    AFTER INSERT OR DELETE ON user_room_memberships
+    FOR EACH ROW
+    EXECUTE FUNCTION update_room_slots_on_membership_change();
+
+-- Enable realtime for new tables (optional)
+ALTER PUBLICATION supabase_realtime ADD TABLE chat_rooms;
+ALTER PUBLICATION supabase_realtime ADD TABLE user_room_memberships;
+ALTER PUBLICATION supabase_realtime ADD TABLE room_messages;
+
+-- Basic RLS policies for new tables (read-only for now)
+ALTER TABLE chat_rooms ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_room_memberships ENABLE ROW LEVEL SECURITY;
+ALTER TABLE room_messages ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Anyone can view public chat rooms" ON chat_rooms
+    FOR SELECT USING (is_public = true);
+    
+CREATE POLICY "Anyone can view room memberships" ON user_room_memberships
+    FOR SELECT USING (true);
+    
+CREATE POLICY "Anyone can view room messages" ON room_messages
+    FOR SELECT USING (true);
+
+    -- Add these RLS policies to your schema.sql for the room tables
+
+-- Allow authenticated users to create rooms
+DROP POLICY IF EXISTS "Authenticated users can create rooms" ON chat_rooms;
+CREATE POLICY "Authenticated users can create rooms" ON chat_rooms
+    FOR INSERT WITH CHECK (auth.uid() = owner_id);
+
+-- Allow room owners to update their rooms
+DROP POLICY IF EXISTS "Room owners can update their rooms" ON chat_rooms;
+CREATE POLICY "Room owners can update their rooms" ON chat_rooms
+    FOR UPDATE USING (auth.uid() = owner_id);
+
+-- Allow room owners to delete their rooms
+DROP POLICY IF EXISTS "Room owners can delete their rooms" ON chat_rooms;
+CREATE POLICY "Room owners can delete their rooms" ON chat_rooms
+    FOR DELETE USING (auth.uid() = owner_id);
+
+-- Allow users to join rooms (insert into memberships)
+DROP POLICY IF EXISTS "Users can join rooms" ON user_room_memberships;
+CREATE POLICY "Users can join rooms" ON user_room_memberships
+    FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+-- Allow users to leave rooms (delete from memberships)
+DROP POLICY IF EXISTS "Users can leave rooms" ON user_room_memberships;
+CREATE POLICY "Users can leave rooms" ON user_room_memberships
+    FOR DELETE USING (auth.uid() = user_id);
+
+-- Allow room members to send messages
+DROP POLICY IF EXISTS "Room members can send messages" ON room_messages;
+CREATE POLICY "Room members can send messages" ON room_messages
+    FOR INSERT WITH CHECK (
+        auth.uid() = sender_id AND
+        EXISTS (
+            SELECT 1 FROM user_room_memberships 
+            WHERE user_id = auth.uid() AND room_id = room_messages.room_id
+        )
+    );
+
+-- Add this to your schema.sql if not already there
+DROP POLICY IF EXISTS "Room owners can update their rooms" ON chat_rooms;
+CREATE POLICY "Room owners can update their rooms" ON chat_rooms
+    FOR UPDATE USING (auth.uid() = owner_id);
+
+-- Also add a policy for anyone to update current_slots (for slot counting)
+DROP POLICY IF EXISTS "Anyone can update room slots" ON chat_rooms;
+CREATE POLICY "Anyone can update room slots" ON chat_rooms
+    FOR UPDATE USING (true);
+
+-- Indexes for performance
+CREATE INDEX IF NOT EXISTS idx_chat_rooms_public ON chat_rooms(is_public) WHERE is_public = true;
+CREATE INDEX IF NOT EXISTS idx_chat_rooms_created ON chat_rooms(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_user_room_memberships_user ON user_room_memberships(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_room_memberships_room ON user_room_memberships(room_id);
+CREATE INDEX IF NOT EXISTS idx_room_messages_room_created ON room_messages(room_id, created_at DESC);
+
+select * from chat_rooms
+
+
+

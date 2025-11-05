@@ -148,66 +148,98 @@ export default function RoomListPanel({ user }) {
     }
   };
 
+  useEffect(() => {
+  if (!user) return;
+
+  // Real-time subscription for room updates
+  const roomUpdateChannel = supabase
+    .channel('room_list_updates')
+    .on(
+      'postgres_changes',
+      {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'chat_rooms',
+      },
+      (payload) => {
+        console.log('🔄 RoomListPanel: Room updated in real-time:', payload.new);
+        // This will trigger a refresh when rooms change
+        if (typeof onRoomUpdate === 'function') {
+          onRoomUpdate();
+        }
+      }
+    )
+    .subscribe((status) => {
+      console.log('📡 RoomListPanel: Real-time subscription status:', status);
+    });
+
+  return () => {
+    supabase.removeChannel(roomUpdateChannel);
+  };
+}, [user]);
+
   // Load rooms on component mount
   useEffect(() => {
-    fetchRooms();
-    fetchCurrentUserRoom();
+  fetchRooms();
+  fetchCurrentUserRoom();
 
-    // Set up real-time subscription for new rooms
-    const roomSubscription = supabase
-      .channel('room_changes')
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'chat_rooms',
-        },
-        (payload) => {
-          console.log('🔄 New room created:', payload.new);
-          setRooms(prev => [payload.new, ...prev]);
-        }
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: 'DELETE',
-          schema: 'public',
-          table: 'chat_rooms',
-        },
-        (payload) => {
-          console.log('🗑️ Room deleted:', payload.old);
-          setRooms(prev => prev.filter(room => room.id !== payload.old.id));
-        }
-      )
-      .on(
-        'postgres_changes', // ADD THIS: Listen for user room membership changes
-        {
-          event: '*',
-          schema: 'public',
-          table: 'user_room_memberships',
-          filter: `user_id=eq.${user?.id}`
-        },
-        (payload) => {
-          console.log('🔄 User room membership changed:', payload);
+  const roomSubscription = supabase
+    .channel('room_changes')
+    .on(
+      'postgres_changes',
+      {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'chat_rooms',
+      },
+      (payload) => {
+        console.log('🔄 New room created:', payload.new);
+        setRooms(prev => [payload.new, ...prev]);
+      }
+    )
+    .on(
+      'postgres_changes',
+      {
+        event: 'DELETE',
+        schema: 'public',
+        table: 'chat_rooms',
+      },
+      (payload) => {
+        console.log('🗑️ Room deleted:', payload.old);
+        setRooms(prev => prev.filter(room => room.id !== payload.old.id));
+      }
+    )
+    .on(
+      'postgres_changes',
+      {
+        event: '*', // Listen for ALL membership changes
+        schema: 'public',
+        table: 'user_room_memberships',
+      },
+      async (payload) => {
+        console.log('🔄 User room membership changed:', payload);
+        
+        // Handle user's own membership changes
+        if (payload.new?.user_id === user?.id || payload.old?.user_id === user?.id) {
           if (payload.eventType === 'INSERT') {
             setCurrentUserRoom(payload.new.room_id);
           } else if (payload.eventType === 'DELETE') {
             setCurrentUserRoom(null);
           }
-          // Also refresh rooms to get updated data
-          fetchRooms();
         }
-      )
-      .subscribe((status) => {
-        console.log('📡 Room subscription status:', status);
-      });
+        
+        // Refresh rooms to get updated slot counts
+        await fetchRooms();
+      }
+    )
+    .subscribe((status) => {
+      console.log('📡 Room subscription status:', status);
+    });
 
-    // Cleanup subscription
-    return () => {
-      supabase.removeChannel(roomSubscription);
-    };
-  }, []);
+  return () => {
+    supabase.removeChannel(roomSubscription);
+  };
+}, [user]);
 
   return (
     <div style={{
