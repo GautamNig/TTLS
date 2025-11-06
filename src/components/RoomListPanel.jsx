@@ -210,6 +210,20 @@ export default function RoomListPanel({ user }) {
       .on(
         'postgres_changes',
         {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'chat_rooms',
+        },
+        (payload) => {
+          console.log('🔄 RoomListPanel: Room updated (slots changed):', payload.new.current_slots);
+          // Update the specific room in the list
+          setRooms(prev => prev.map(room =>
+            room.id === payload.new.id ? { ...room, ...payload.new } : room
+          ));
+        })
+      .on(
+        'postgres_changes',
+        {
           event: 'INSERT',
           schema: 'public',
           table: 'user_room_memberships',

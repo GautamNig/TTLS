@@ -7,8 +7,94 @@ export default function ChatPanel({ user, room, onSendMessage = null }) {
   const [text, setText] = useState("");
   const [roomMessages, setRoomMessages] = useState([]); // CHANGED FROM messages
   const messagesEndRef = useRef(null);
-
+  const [currentRoom, setCurrentRoom] = useState(room);
   // Fetch room messages when room changes
+
+
+  const refreshRoomData = async () => {
+    if (!room) return;
+
+    try {
+      console.log('🔄 ChatPanel: Refreshing room data...');
+      const { data, error } = await supabase
+        .from('chat_rooms')
+        .select('*')
+        .eq('id', room.id)
+        .single();
+
+      if (error) throw error;
+
+      console.log('✅ ChatPanel: Room data refreshed:', data);
+      setCurrentRoom(data);
+    } catch (error) {
+      console.error('❌ ChatPanel: Error refreshing room data:', error);
+    }
+  };
+
+  useEffect(() => {
+    setCurrentRoom(room);
+  }, [room]);
+
+  useEffect(() => {
+    if (!room) return;
+
+    console.log('🔔 ChatPanel: Setting up membership changes subscription');
+
+    const membershipChannel = supabase
+      .channel('chatpanel_membership_changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'user_room_memberships',
+          filter: `room_id=eq.${room.id}`
+        },
+        (payload) => {
+          console.log('🔄 ChatPanel: Membership changed for this room:', payload);
+          // When members join/leave, refresh the room data to get updated slot count
+          refreshRoomData();
+        }
+      )
+      .subscribe((status) => {
+        console.log('📡 ChatPanel Membership Subscription Status:', status);
+      });
+
+    return () => {
+      supabase.removeChannel(membershipChannel);
+    };
+  }, [room]);
+
+  useEffect(() => {
+    if (!room) return;
+
+    console.log('🔔 ChatPanel: Setting up room updates subscription');
+
+    const roomUpdateChannel = supabase
+      .channel('chatpanel_room_updates')
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'chat_rooms',
+          filter: `id=eq.${room.id}`
+        },
+        (payload) => {
+          console.log('🔄 ChatPanel: Room updated:', payload.new);
+          // Update the room data with fresh slot count
+          setCurrentRoom(prev => ({ ...prev, ...payload.new }));
+        }
+      )
+      .subscribe((status) => {
+        console.log('📡 ChatPanel Room Update Status:', status);
+      });
+
+    return () => {
+      supabase.removeChannel(roomUpdateChannel);
+    };
+  }, [room]);
+
   useEffect(() => {
     if (!room) {
       setRoomMessages([]);
@@ -187,7 +273,7 @@ export default function ChatPanel({ user, room, onSendMessage = null }) {
           <div>
             <div style={{ fontWeight: '600', fontSize: '18px' }}>{room.name}</div>
             <div style={{ fontSize: '12px', opacity: 0.6 }}>
-              Room Chat • {room.current_slots} members • Created by {getUsername(room.creator_email || 'Unknown')}
+              Room Chat • {currentRoom?.current_slots || 0} members • Created by {getUsername(currentRoom?.creator_email || 'Unknown')}
             </div>
           </div>
         </div>

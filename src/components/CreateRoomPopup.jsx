@@ -8,6 +8,7 @@ export default function CreateRoomPopup({ user, onCreateRoom, onClose }) {
   const [maxSlots, setMaxSlots] = useState(10);
   const [isCreating, setIsCreating] = useState(false);
 
+  // In CreateRoomPopup.jsx - Update the handleSubmit function
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!roomName.trim() || isCreating) return;
@@ -19,8 +20,21 @@ export default function CreateRoomPopup({ user, onCreateRoom, onClose }) {
         description: description.trim(),
         maxSlots
       });
-      
-      // Simple direct database insert for now
+
+      // STEP 1: Leave current room first (if any)
+      const { error: leaveError } = await supabase
+        .from('user_room_memberships')
+        .delete()
+        .eq('user_id', user.id);
+
+      if (leaveError) {
+        console.error('❌ Error leaving current room:', leaveError);
+        // Continue anyway - don't throw error
+      } else {
+        console.log('✅ Left current room before creating new one');
+      }
+
+      // STEP 2: Create the new room
       const { data: roomData, error } = await supabase
         .from('chat_rooms')
         .insert({
@@ -28,7 +42,7 @@ export default function CreateRoomPopup({ user, onCreateRoom, onClose }) {
           description: description.trim(),
           owner_id: user.id,
           max_slots: maxSlots,
-          current_slots: 1,
+          current_slots: 1, // Start with creator as the only member
           is_public: true
         })
         .select()
@@ -41,8 +55,8 @@ export default function CreateRoomPopup({ user, onCreateRoom, onClose }) {
       }
 
       console.log('✅ Room created successfully:', roomData);
-      
-      // Auto-join the room creator
+
+      // STEP 3: Auto-join the room creator
       const { error: joinError } = await supabase
         .from('user_room_memberships')
         .insert({
@@ -52,6 +66,7 @@ export default function CreateRoomPopup({ user, onCreateRoom, onClose }) {
 
       if (joinError) {
         console.error('❌ Room join error:', joinError);
+        // Still continue - the room was created
       } else {
         console.log('✅ Room creator auto-joined room');
       }
@@ -59,9 +74,10 @@ export default function CreateRoomPopup({ user, onCreateRoom, onClose }) {
       if (typeof onCreateRoom === 'function') {
         onCreateRoom(roomData);
       }
-      
+
+      alert(`Room "${roomName}" created successfully! 🎉`);
       onClose();
-      
+
     } catch (error) {
       console.error('❌ Room creation exception:', error);
       alert('Error creating room: ' + error.message);

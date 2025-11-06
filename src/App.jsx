@@ -286,83 +286,81 @@ export default function App() {
     return () => clearInterval(cleanupInterval);
   }, [user]);
 
-  const joinRoom = async (roomId) => {
-    if (!user) return;
+  // In App.jsx - Fix the joinRoom function
+const joinRoom = async (roomId) => {
+  if (!user) return;
 
-    try {
-      // Check if user is banned from this room
-      const { data: banCheck, error: banError } = await supabase
-        .from('room_bans')
-        .select('id')
-        .eq('room_id', roomId)
-        .eq('banned_user_id', user.id)
-        .single();
+  try {
+    console.log('🔄 joinRoom: Starting process for room:', roomId);
+    console.log('🔍 joinRoom: Current user:', user.id, user.email);
 
-      if (banCheck) {
-        alert('🚫 You are banned from this room and cannot join.');
-        return;
-      }
+    // STEP 1: Get current room membership BEFORE any changes
+    const { data: currentMemberships, error: currentError } = await supabase
+      .from('user_room_memberships')
+      .select('room_id')
+      .eq('user_id', user.id);
 
-      // STEP 1: Get current room membership BEFORE any changes
-      const { data: currentMemberships, error: currentError } = await supabase
-        .from('user_room_memberships')
-        .select('room_id')
-        .eq('user_id', user.id);
-
-      const oldRoomId = currentMemberships && currentMemberships.length > 0 ? currentMemberships[0].room_id : null;
-      console.log('📊 joinRoom: User currently in room:', oldRoomId);
-
-      // STEP 2: Leave current room if exists
-      if (oldRoomId) {
-        console.log('🚪 joinRoom: Leaving old room:', oldRoomId);
-        const { error: leaveError } = await supabase
-          .from('user_room_memberships')
-          .delete()
-          .eq('user_id', user.id);
-
-        if (leaveError) {
-          console.error('❌ joinRoom: Error leaving old room:', leaveError);
-        } else {
-          console.log('✅ joinRoom: Successfully left old room');
-
-          // Update slots for OLD room immediately after leaving
-          console.log('🔄 joinRoom: Updating slots for old room:', oldRoomId);
-          await updateRoomSlots(oldRoomId);
-        }
-      }
-
-      // STEP 3: Join new room
-      console.log('🎯 joinRoom: Joining new room:', roomId);
-      const { error: joinError } = await supabase
-        .from('user_room_memberships')
-        .insert({
-          user_id: user.id,
-          room_id: roomId
-        });
-
-      if (joinError) {
-        console.error('❌ joinRoom: Error joining new room:', joinError);
-        alert('Error joining room: ' + joinError.message);
-        return;
-      }
-      console.log('✅ joinRoom: Successfully joined new room');
-
-      // STEP 4: Update slots for NEW room
-      console.log('🔄 joinRoom: Updating slots for new room:', roomId);
-      await updateRoomSlots(roomId);
-
-      // STEP 5: Refresh all data
-      console.log('🔄 joinRoom: Refreshing room data...');
-      await fetchRooms();
-      await fetchCurrentUserRoom();
-
-      console.log('✅ joinRoom: Process completed successfully');
-
-    } catch (error) {
-      console.error('❌ joinRoom: Unexpected error:', error);
-      alert('Error joining room: ' + error.message);
+    if (currentError) {
+      console.error('❌ joinRoom: Error fetching current memberships:', currentError);
+      throw currentError;
     }
-  };
+
+    const oldRoomId = currentMemberships && currentMemberships.length > 0 ? currentMemberships[0].room_id : null;
+    console.log('📊 joinRoom: User currently in room:', oldRoomId);
+
+    // STEP 2: Leave current room if exists (CRITICAL FIX)
+    if (oldRoomId) {
+      console.log('🚪 joinRoom: Leaving old room:', oldRoomId);
+      const { error: leaveError } = await supabase
+        .from('user_room_memberships')
+        .delete()
+        .eq('user_id', user.id)
+        .eq('room_id', oldRoomId);
+
+      if (leaveError) {
+        console.error('❌ joinRoom: Error leaving old room:', leaveError);
+        throw leaveError;
+      } else {
+        console.log('✅ joinRoom: Successfully left old room');
+
+        // Update slots for OLD room immediately after leaving
+        console.log('🔄 joinRoom: Updating slots for old room:', oldRoomId);
+        await updateRoomSlots(oldRoomId);
+      }
+    }
+
+    // STEP 3: Join new room
+    console.log('🎯 joinRoom: Joining new room:', roomId);
+    const { error: joinError } = await supabase
+      .from('user_room_memberships')
+      .insert({
+        user_id: user.id,
+        room_id: roomId
+      });
+
+    if (joinError) {
+      console.error('❌ joinRoom: Error joining new room:', joinError);
+      alert('Error joining room: ' + joinError.message);
+      return;
+    }
+    console.log('✅ joinRoom: Successfully joined new room');
+
+    // STEP 4: Update slots for NEW room
+    console.log('🔄 joinRoom: Updating slots for new room:', roomId);
+    await updateRoomSlots(roomId);
+
+    // STEP 5: Refresh all data
+    console.log('🔄 joinRoom: Refreshing room data...');
+    await fetchRooms();
+    await fetchCurrentUserRoom();
+
+    console.log('✅ joinRoom: Process completed successfully');
+
+  } catch (error) {
+    console.error('❌ joinRoom: Unexpected error:', error);
+    alert('Error joining room: ' + error.message);
+  }
+};
   // Add these functions to App.jsx (around line 600, before joinRoom)
 
   // Fetch user's current room
