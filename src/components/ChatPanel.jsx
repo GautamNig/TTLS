@@ -17,6 +17,7 @@ export default function ChatPanel({ user, room, onSendMessage = null }) {
     const fetchRoomMessages = async () => {
       try {
         console.log('🔄 Fetching room messages for:', room.name);
+        console.log('🔄 THE ROOM DATA:', room);
         const { data, error } = await supabase
           .from('room_messages')
           .select('*')
@@ -63,7 +64,7 @@ export default function ChatPanel({ user, room, onSendMessage = null }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!text.trim() || !room) return;
-    
+
     if (typeof onSendMessage === "function") {
       await onSendMessage(text.trim());
     }
@@ -71,9 +72,9 @@ export default function ChatPanel({ user, room, onSendMessage = null }) {
   };
 
   const formatTime = (timestamp) => {
-    return new Date(timestamp).toLocaleTimeString([], { 
-      hour: '2-digit', 
-      minute: '2-digit' 
+    return new Date(timestamp).toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit'
     });
   };
 
@@ -114,7 +115,7 @@ export default function ChatPanel({ user, room, onSendMessage = null }) {
       color: 'white',
       fontFamily: 'sans-serif'
     }}>
-      
+
       {/* Room Header - UPDATED */}
       <div style={{
         flexShrink: 0,
@@ -130,7 +131,7 @@ export default function ChatPanel({ user, room, onSendMessage = null }) {
           <div>
             <div style={{ fontWeight: '600', fontSize: '18px' }}>{room.name}</div>
             <div style={{ fontSize: '12px', opacity: 0.6 }}>
-              Room Chat • {room.current_slots} members • Created by {getUsername(room.user_positions?.email || room.creator_email || 'Unknown')}
+              Room Chat • {room.current_slots} members • Created by {getUsername(room.creator_email || 'Unknown')}
             </div>
           </div>
         </div>
@@ -175,7 +176,7 @@ export default function ChatPanel({ user, room, onSendMessage = null }) {
             // User messages
             const isCurrentUser = m.sender_email === user?.email;
             const username = getUsername(m.sender_email);
-            
+
             return (
               <div
                 key={m.id}
@@ -188,7 +189,7 @@ export default function ChatPanel({ user, room, onSendMessage = null }) {
                   maxWidth: '80%',
                   marginLeft: isCurrentUser ? 'auto' : '0'
                 }}>
-                  
+
                   {/* Username for other users */}
                   {!isCurrentUser && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px', paddingLeft: '12px' }}>
@@ -210,14 +211,14 @@ export default function ChatPanel({ user, room, onSendMessage = null }) {
                     position: 'relative',
                     padding: '12px 16px',
                     borderRadius: '16px',
-                    background: isCurrentUser 
+                    background: isCurrentUser
                       ? 'linear-gradient(135deg, #3B82F6, #1D4ED8)'
                       : '#374151',
                     borderTopRightRadius: isCurrentUser ? '4px' : '16px',
                     borderTopLeftRadius: isCurrentUser ? '16px' : '4px',
                     boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)'
                   }}>
-                    
+
                     {/* Message content */}
                     <div style={{
                       color: 'white',
@@ -227,7 +228,7 @@ export default function ChatPanel({ user, room, onSendMessage = null }) {
                     }}>
                       {m.content}
                     </div>
-                    
+
                     {/* Timestamp */}
                     <div style={{
                       fontSize: '11px',
@@ -256,7 +257,7 @@ export default function ChatPanel({ user, room, onSendMessage = null }) {
             );
           })}
         </div>
-        
+
         <div ref={messagesEndRef} />
       </div>
 

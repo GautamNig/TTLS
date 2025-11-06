@@ -403,26 +403,54 @@ export default function App() {
 };
 
   // Fetch all public rooms
-  // Fetch all public rooms
-  const fetchRooms = async () => {
-    try {
-      console.log('🔄 Fetching rooms...');
-      const { data, error } = await supabase
-        .from('chat_rooms')
-        .select('*')
-        .eq('is_public', true)
-        .order('created_at', { ascending: false });
+const fetchRooms = async () => {
+  try {
+    console.log('🔄 Fetching rooms...');
+    
+    // First get the basic room data
+    const { data: roomsData, error } = await supabase
+      .from('chat_rooms')
+      .select('*')
+      .eq('is_public', true)
+      .order('created_at', { ascending: false });
 
-      if (error) throw error;
+    if (error) throw error;
 
-      console.log('✅ Rooms fetched:', data?.length || 0);
-      setRooms(data || []);
-      return data || []; // RETURN the data
-    } catch (e) {
-      console.error("❌ fetchRooms error", e);
-      return [];
-    }
-  };
+    console.log('✅ Basic rooms fetched:', roomsData);
+
+    // Then fetch creator emails for each room
+    const roomsWithCreators = await Promise.all(
+      roomsData.map(async (room) => {
+        try {
+          const { data: creator } = await supabase
+            .from('user_positions')
+            .select('email')
+            .eq('user_id', room.owner_id)
+            .single();
+
+          return {
+            ...room,
+            creator_email: creator?.email || 'Unknown'
+          };
+        } catch (err) {
+          console.error(`❌ Error fetching creator for room ${room.name}:`, err);
+          return {
+            ...room,
+            creator_email: 'Unknown'
+          };
+        }
+      })
+    );
+
+    console.log('✅ Rooms with creators:', roomsWithCreators);
+    setRooms(roomsWithCreators);
+    return roomsWithCreators;
+
+  } catch (e) {
+    console.error("❌ fetchRooms error", e);
+    return [];
+  }
+};
 
   async function fetchAllUsers() {
     try {
