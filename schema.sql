@@ -485,7 +485,183 @@ CREATE INDEX IF NOT EXISTS idx_user_room_memberships_user ON user_room_membershi
 CREATE INDEX IF NOT EXISTS idx_user_room_memberships_room ON user_room_memberships(room_id);
 CREATE INDEX IF NOT EXISTS idx_room_messages_room_created ON room_messages(room_id, created_at DESC);
 
-select * from chat_rooms
+-- Add validation to prevent non-members from sending room messages
+-- Add validation to prevent non-members from sending room messages
+-- Add this function to prevent non-members from sending room messages
+CREATE OR REPLACE FUNCTION validate_room_membership()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  -- Check if the user is a member of the room they're trying to message
+  IF NOT EXISTS (
+    SELECT 1 FROM user_room_memberships 
+    WHERE user_id = NEW.sender_id AND room_id = NEW.room_id
+  ) THEN
+    RAISE EXCEPTION 'User is not a member of this room';
+  END IF;
+  
+  RETURN NEW;
+END;
+$$;
 
+-- Create the trigger
+DROP TRIGGER IF EXISTS room_message_membership_trigger ON room_messages;
+CREATE TRIGGER room_message_membership_trigger
+  BEFORE INSERT ON room_messages
+  FOR EACH ROW
+  EXECUTE FUNCTION validate_room_membership();
 
+-- Create a secure function to send room messages
+-- Create a secure function to send room messages with membership check
+-- Update the send_room_message function to check bans
+CREATE OR REPLACE FUNCTION send_room_message(
+  p_room_id UUID,
+  p_sender_id UUID,
+  p_sender_email TEXT,
+  p_content TEXT
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  is_member BOOLEAN;
+  is_banned BOOLEAN;
+BEGIN
+  -- Check if user is banned
+  SELECT EXISTS (
+    SELECT 1 FROM room_bans 
+    WHERE room_id = p_room_id 
+    AND banned_user_id = p_sender_id
+    AND (expires_at IS NULL OR expires_at > NOW())
+  ) INTO is_banned;
 
+  IF is_banned THEN
+    RETURN json_build_object('success', false, 'error', 'You are banned from this room');
+  END IF;
+
+  -- Check if user is a member
+  SELECT EXISTS (
+    SELECT 1 FROM user_room_memberships 
+    WHERE user_id = p_sender_id 
+    AND room_id = p_room_id
+  ) INTO is_member;
+
+  IF NOT is_member THEN
+    RETURN json_build_object('success', false, 'error', 'You are not a member of this room');
+  END IF;
+
+  -- Insert the message
+  INSERT INTO room_messages (room_id, sender_id, sender_email, content, type, created_at)
+  VALUES (p_room_id, p_sender_id, p_sender_email, p_content, 'user', NOW());
+  
+  RETURN json_build_object('success', true);
+EXCEPTION
+  WHEN others THEN
+    RETURN json_build_object('success', false, 'error', SQLERRM);
+END;
+$$;
+
+-- Grant execute permission
+GRANT EXECUTE ON FUNCTION send_room_message TO authenticated, anon;
+
+-- Allow room owners to kick any user from their room
+DROP POLICY IF EXISTS "Room owners can kick users" ON user_room_memberships;
+CREATE POLICY "Room owners can kick users" ON user_room_memberships
+FOR DELETE USING (
+  EXISTS (
+    SELECT 1 FROM chat_rooms 
+    WHERE chat_rooms.id = user_room_memberships.room_id 
+    AND chat_rooms.owner_id = auth.uid()
+  )
+);
+
+-- Create room bans table
+CREATE TABLE room_bans (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    room_id UUID NOT NULL REFERENCES chat_rooms(id) ON DELETE CASCADE,
+    banned_user_id UUID NOT NULL REFERENCES user_positions(user_id) ON DELETE CASCADE,
+    banned_by_user_id UUID NOT NULL REFERENCES user_positions(user_id) ON DELETE CASCADE,
+    reason TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
+    expires_at TIMESTAMP WITH TIME ZONE,
+    UNIQUE(room_id, banned_user_id) -- Prevent duplicate bans
+);
+
+-- Enable realtime
+ALTER PUBLICATION supabase_realtime ADD TABLE room_bans;
+
+-- RLS Policies
+ALTER TABLE room_bans ENABLE ROW LEVEL SECURITY;
+
+-- Anyone can view bans
+CREATE POLICY "Anyone can view room bans" ON room_bans
+    FOR SELECT USING (true);
+
+-- Room owners can manage bans
+CREATE POLICY "Room owners can manage bans" ON room_bans
+    FOR ALL USING (
+        EXISTS (
+            SELECT 1 FROM chat_rooms 
+            WHERE chat_rooms.id = room_bans.room_id 
+            AND chat_rooms.owner_id = auth.uid()
+        )
+    );
+
+-- Index for performance
+CREATE INDEX idx_room_bans_room_user ON room_bans(room_id, banned_user_id);
+CREATE INDEX idx_room_bans_expires ON room_bans(expires_at) WHERE expires_at IS NOT NULL;
+
+CREATE OR REPLACE FUNCTION check_room_ban_before_join()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  -- Check if user is banned from this room
+  IF EXISTS (
+    SELECT 1 FROM room_bans 
+    WHERE room_id = NEW.room_id 
+    AND banned_user_id = NEW.user_id
+    AND (expires_at IS NULL OR expires_at > NOW())
+  ) THEN
+    RAISE EXCEPTION 'User is banned from this room';
+  END IF;
+  
+  RETURN NEW;
+END;
+$$;
+
+-- Trigger to prevent banned users from joining
+DROP TRIGGER IF EXISTS prevent_banned_join ON user_room_memberships;
+CREATE TRIGGER prevent_banned_join
+  BEFORE INSERT ON user_room_memberships
+  FOR EACH ROW
+  EXECUTE FUNCTION check_room_ban_before_join();
+
+-- Function to check if user is banned before sending messages
+CREATE OR REPLACE FUNCTION check_room_ban_before_message()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  -- Check if user is banned from this room
+  IF EXISTS (
+    SELECT 1 FROM room_bans 
+    WHERE room_id = NEW.room_id 
+    AND banned_user_id = NEW.sender_id
+    AND (expires_at IS NULL OR expires_at > NOW())
+  ) THEN
+    RAISE EXCEPTION 'User is banned from this room';
+  END IF;
+  
+  RETURN NEW;
+END;
+$$;
+
+-- Trigger to prevent banned users from sending messages
+DROP TRIGGER IF EXISTS prevent_banned_messages ON room_messages;
+CREATE TRIGGER prevent_banned_messages
+  BEFORE INSERT ON room_messages
+  FOR EACH ROW
+  EXECUTE FUNCTION check_room_ban_before_message();
