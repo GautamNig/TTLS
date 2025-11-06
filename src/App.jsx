@@ -286,17 +286,22 @@ export default function App() {
     return () => clearInterval(cleanupInterval);
   }, [user]);
 
-  // Add this function to App.jsx
-  // In App.jsx, update the joinRoom function
-  // Simplified joinRoom using the helper
-  // Replace the joinRoom function in App.jsx with this version
-  // Update the joinRoom function in App.jsx to update BOTH old and new rooms
   const joinRoom = async (roomId) => {
     if (!user) return;
 
     try {
-      console.log('🔄 joinRoom: Starting process for room:', roomId);
-      console.log('🔍 joinRoom: Current user:', user.id, user.email);
+      // Check if user is banned from this room
+      const { data: banCheck, error: banError } = await supabase
+        .from('room_bans')
+        .select('id')
+        .eq('room_id', roomId)
+        .eq('banned_user_id', user.id)
+        .single();
+
+      if (banCheck) {
+        alert('🚫 You are banned from this room and cannot join.');
+        return;
+      }
 
       // STEP 1: Get current room membership BEFORE any changes
       const { data: currentMemberships, error: currentError } = await supabase
@@ -362,95 +367,95 @@ export default function App() {
 
   // Fetch user's current room
   const fetchCurrentUserRoom = async (currentUser = user) => {
-  const userToCheck = currentUser || user;
-  
-  if (!userToCheck) {
-    console.log('❌ fetchCurrentUserRoom: No user provided');
-    setCurrentUserRoom(null);
-    return null;
-  }
+    const userToCheck = currentUser || user;
 
-  try {
-    console.log('🔄 fetchCurrentUserRoom: Fetching for user:', userToCheck.id, userToCheck.email);
-    const { data: userRooms, error } = await supabase
-      .from('user_room_memberships')
-      .select('room_id')
-      .eq('user_id', userToCheck.id);
-
-    if (error) {
-      console.error('❌ Error fetching user rooms:', error);
+    if (!userToCheck) {
+      console.log('❌ fetchCurrentUserRoom: No user provided');
       setCurrentUserRoom(null);
       return null;
     }
 
-    console.log('✅ User room memberships found:', userRooms);
+    try {
+      console.log('🔄 fetchCurrentUserRoom: Fetching for user:', userToCheck.id, userToCheck.email);
+      const { data: userRooms, error } = await supabase
+        .from('user_room_memberships')
+        .select('room_id')
+        .eq('user_id', userToCheck.id);
 
-    if (userRooms && userRooms.length > 0) {
-      const roomId = userRooms[0].room_id;
-      setCurrentUserRoom(roomId);
-      console.log('✅ Current user room set to:', roomId);
-      return roomId;
-    } else {
+      if (error) {
+        console.error('❌ Error fetching user rooms:', error);
+        setCurrentUserRoom(null);
+        return null;
+      }
+
+      console.log('✅ User room memberships found:', userRooms);
+
+      if (userRooms && userRooms.length > 0) {
+        const roomId = userRooms[0].room_id;
+        setCurrentUserRoom(roomId);
+        console.log('✅ Current user room set to:', roomId);
+        return roomId;
+      } else {
+        setCurrentUserRoom(null);
+        console.log('✅ User is not in any room');
+        return null;
+      }
+    } catch (err) {
+      console.error('❌ fetchCurrentUserRoom error:', err);
       setCurrentUserRoom(null);
-      console.log('✅ User is not in any room');
       return null;
     }
-  } catch (err) {
-    console.error('❌ fetchCurrentUserRoom error:', err);
-    setCurrentUserRoom(null);
-    return null;
-  }
-};
+  };
 
   // Fetch all public rooms
-const fetchRooms = async () => {
-  try {
-    console.log('🔄 Fetching rooms...');
-    
-    // First get the basic room data
-    const { data: roomsData, error } = await supabase
-      .from('chat_rooms')
-      .select('*')
-      .eq('is_public', true)
-      .order('created_at', { ascending: false });
+  const fetchRooms = async () => {
+    try {
+      console.log('🔄 Fetching rooms...');
 
-    if (error) throw error;
+      // First get the basic room data
+      const { data: roomsData, error } = await supabase
+        .from('chat_rooms')
+        .select('*')
+        .eq('is_public', true)
+        .order('created_at', { ascending: false });
 
-    console.log('✅ Basic rooms fetched:', roomsData);
+      if (error) throw error;
 
-    // Then fetch creator emails for each room
-    const roomsWithCreators = await Promise.all(
-      roomsData.map(async (room) => {
-        try {
-          const { data: creator } = await supabase
-            .from('user_positions')
-            .select('email')
-            .eq('user_id', room.owner_id)
-            .single();
+      console.log('✅ Basic rooms fetched:', roomsData);
 
-          return {
-            ...room,
-            creator_email: creator?.email || 'Unknown'
-          };
-        } catch (err) {
-          console.error(`❌ Error fetching creator for room ${room.name}:`, err);
-          return {
-            ...room,
-            creator_email: 'Unknown'
-          };
-        }
-      })
-    );
+      // Then fetch creator emails for each room
+      const roomsWithCreators = await Promise.all(
+        roomsData.map(async (room) => {
+          try {
+            const { data: creator } = await supabase
+              .from('user_positions')
+              .select('email')
+              .eq('user_id', room.owner_id)
+              .single();
 
-    console.log('✅ Rooms with creators:', roomsWithCreators);
-    setRooms(roomsWithCreators);
-    return roomsWithCreators;
+            return {
+              ...room,
+              creator_email: creator?.email || 'Unknown'
+            };
+          } catch (err) {
+            console.error(`❌ Error fetching creator for room ${room.name}:`, err);
+            return {
+              ...room,
+              creator_email: 'Unknown'
+            };
+          }
+        })
+      );
 
-  } catch (e) {
-    console.error("❌ fetchRooms error", e);
-    return [];
-  }
-};
+      console.log('✅ Rooms with creators:', roomsWithCreators);
+      setRooms(roomsWithCreators);
+      return roomsWithCreators;
+
+    } catch (e) {
+      console.error("❌ fetchRooms error", e);
+      return [];
+    }
+  };
 
   async function fetchAllUsers() {
     try {

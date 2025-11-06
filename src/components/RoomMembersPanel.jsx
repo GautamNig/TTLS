@@ -6,6 +6,114 @@ export default function RoomMembersPanel({ room, user, onKickUser, onTransferOwn
     const [isExpanded, setIsExpanded] = useState(false);
     const [roomMembers, setRoomMembers] = useState([]);
     const [loading, setLoading] = useState(false);
+    const [bannedUsers, setBannedUsers] = useState([]);
+
+    const fetchBannedUsers = async () => {
+        if (!room) return;
+
+        try {
+            const { data, error } = await supabase
+                .from('room_bans')
+                .select(`
+        *,
+        banned_user:user_positions!room_bans_banned_user_id_fkey (
+          email
+        ),
+        banned_by:user_positions!room_bans_banned_by_user_id_fkey (
+          email
+        )
+      `)
+                .eq('room_id', room.id)
+                .is('expires_at', null); // Only permanent bans for now
+
+            if (error) throw error;
+            setBannedUsers(data || []);
+        } catch (error) {
+            console.error('❌ Error fetching banned users:', error);
+        }
+    };
+
+    // Ban user function
+    // In RoomMembersPanel.jsx - Update handleBanUser
+    const handleBanUser = async (userId) => {
+        if (!room || !window.confirm('SPINNING BACK KICK! 🦵\n\nAre you sure you want to BAN this user? They will be immediately removed and cannot rejoin.')) return;
+
+        try {
+            console.log('🦵 Banning user:', userId, 'from room:', room.id);
+
+            // STEP 1: Kick user from room (remove membership)
+            const { error: kickError } = await supabase
+                .from('user_room_memberships')
+                .delete()
+                .eq('user_id', userId)
+                .eq('room_id', room.id);
+
+            if (kickError) {
+                console.error('❌ Error kicking during ban:', kickError);
+                throw kickError;
+            }
+
+            // STEP 2: Add to ban list
+            const { error: banError } = await supabase
+                .from('room_bans')
+                .insert({
+                    room_id: room.id,
+                    banned_user_id: userId,
+                    banned_by_user_id: user.id,
+                    reason: 'Spinning back kick by room owner'
+                });
+
+            if (banError) {
+                console.error('❌ Error adding ban:', banError);
+                throw banError;
+            }
+
+            console.log('✅ User banned successfully');
+
+            // STEP 3: Refresh both lists
+            await fetchRoomMembers();
+            await fetchBannedUsers();
+
+            // STEP 4: Update room slots
+            if (typeof onKickUser === 'function') {
+                onKickUser(userId); // This should update room slots
+            }
+
+            alert('💥 SPINNING BACK KICK! User has been BANNED from this room!');
+
+        } catch (error) {
+            console.error('❌ Error in spinning back kick:', error);
+            alert('Error banning user: ' + error.message);
+        }
+    };
+
+    // Unban user function  
+    const handleUnbanUser = async (banId) => {
+        if (!window.confirm('Are you sure you want to unban this user?')) return;
+
+        try {
+            const { error } = await supabase
+                .from('room_bans')
+                .delete()
+                .eq('id', banId);
+
+            if (error) throw error;
+
+            fetchBannedUsers(); // Refresh banned list
+            alert('User has been unbanned!');
+
+        } catch (error) {
+            console.error('❌ Error unbanning user:', error);
+            alert('Error unbanning user: ' + error.message);
+        }
+    };
+
+    useEffect(() => {
+        if (isExpanded) {
+            fetchRoomMembers();
+            fetchBannedUsers();
+        }
+    }, [isExpanded, room]);
 
     // Fetch room members
     const fetchRoomMembers = async () => {
@@ -171,14 +279,6 @@ export default function RoomMembersPanel({ room, user, onKickUser, onTransferOwn
                     paddingBottom: '12px',
                     borderBottom: '1px solid rgba(255,255,255,0.1)'
                 }}>
-                    <div>
-                        <h4 style={{ color: 'white', margin: 0, fontSize: '16px', fontWeight: '600' }}>
-                            Room Members
-                        </h4>
-                        <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: '12px', marginTop: '4px' }}>
-                            {roomMembers.length} members in {room.name}
-                        </div>
-                    </div>
                     <button
                         onClick={() => setIsExpanded(false)}
                         style={{
@@ -200,51 +300,16 @@ export default function RoomMembersPanel({ room, user, onKickUser, onTransferOwn
                     </button>
                 </div>
 
-<div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-  <div>
-    <h4 style={{ color: 'white', margin: 0, fontSize: '16px', fontWeight: '600' }}>
-      Room Members
-    </h4>
-    <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: '12px', marginTop: '4px' }}>
-      {roomMembers.length} members in {room.name}
-    </div>
-  </div>
-  <div style={{ display: 'flex', gap: '8px' }}>
-    <button
-      onClick={fetchRoomMembers}
-      style={{
-        background: 'rgba(59, 130, 246, 0.3)',
-        border: '1px solid rgba(59, 130, 246, 0.5)',
-        borderRadius: '6px',
-        color: 'white',
-        cursor: 'pointer',
-        padding: '6px 10px',
-        fontSize: '11px'
-      }}
-    >
-      🔄 Refresh
-    </button>
-    <button
-      onClick={() => setIsExpanded(false)}
-      style={{
-        background: 'rgba(255,255,255,0.1)',
-        border: 'none',
-        borderRadius: '8px',
-        color: 'white',
-        cursor: 'pointer',
-        padding: '6px',
-        fontSize: '14px',
-        width: '28px',
-        height: '28px',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center'
-      }}
-    >
-      ✕
-    </button>
-  </div>
-</div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                    {/* <div>
+                        <h4 style={{ color: 'white', margin: 0, fontSize: '16px', fontWeight: '600' }}>
+                            Room Members
+                        </h4>
+                        <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: '12px', marginTop: '4px' }}>
+                            {roomMembers.length} members in {room.name}
+                        </div>
+                    </div> */}
+                </div>
 
                 {/* Members List */}
                 {loading ? (
@@ -359,6 +424,25 @@ export default function RoomMembersPanel({ room, user, onKickUser, onTransferOwn
                                             }}
                                         >
                                             🚪
+                                        </button>
+                                        <button
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleBanUser(member.user_id);
+                                            }}
+                                            title="Spinning Back Kick (Ban)"
+                                            style={{
+                                                background: 'rgba(139, 69, 19, 0.3)',
+                                                border: '1px solid rgba(139, 69, 19, 0.6)',
+                                                borderRadius: '4px',
+                                                color: '#8B4513',
+                                                cursor: 'pointer',
+                                                padding: '4px 6px',
+                                                fontSize: '10px',
+                                                fontWeight: 'bold'
+                                            }}
+                                        >
+                                            🦵
                                         </button>
                                     </div>
                                 )}
