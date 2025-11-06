@@ -1,5 +1,6 @@
 // src/components/ChatPanel.jsx - UPDATED FOR ROOMS
 import React, { useEffect, useRef, useState } from "react";
+import RoomMembersPanel from "./RoomMembersPanel";
 import { supabase } from "../supabaseClient"; // ADD THIS IMPORT
 
 export default function ChatPanel({ user, room, onSendMessage = null }) {
@@ -82,6 +83,53 @@ export default function ChatPanel({ user, room, onSendMessage = null }) {
     return email.split('@')[0];
   };
 
+  const handleKickUser = async (userId) => {
+    console.log('🚪 Kick user clicked for:', userId);
+    console.log('🚪 Kick user clicked for:', room.id);
+    if (!room || !window.confirm('Are you sure you want to kick this user from the room?')) return;
+
+    try {
+      const { error } = await supabase
+        .from('user_room_memberships')
+        .delete()
+        .eq('user_id', userId)
+        .eq('room_id', room.id);
+
+      if (error) throw error;
+
+      console.log('✅ User kicked successfully');
+      // Note: The RoomMembersPanel will auto-refresh due to real-time subscription
+    } catch (error) {
+      console.error('❌ Error kicking user:', error);
+      alert('Error kicking user: ' + error.message);
+    }
+  };
+
+  const handleTransferOwnership = async (newOwnerId) => {
+    if (!room || !window.confirm('Are you sure you want to transfer room ownership? You will no longer be the owner.')) return;
+
+    try {
+      const { error } = await supabase
+        .from('chat_rooms')
+        .update({ owner_id: newOwnerId })
+        .eq('id', room.id);
+
+      if (error) throw error;
+
+      alert('Ownership transferred successfully!');
+      console.log('✅ Ownership transferred to:', newOwnerId);
+
+      // Refresh the page to update room data and UI
+      setTimeout(() => {
+        window.location.reload();
+      }, 1000);
+
+    } catch (error) {
+      console.error('❌ Error transferring ownership:', error);
+      alert('Error transferring ownership: ' + error.message);
+    }
+  };
+
   // Show different UI when not in a room
   if (!room) {
     return (
@@ -115,6 +163,12 @@ export default function ChatPanel({ user, room, onSendMessage = null }) {
       color: 'white',
       fontFamily: 'sans-serif'
     }}>
+      <RoomMembersPanel
+        room={room}
+        user={user}
+        onKickUser={handleKickUser}
+        onTransferOwnership={handleTransferOwnership}
+      />
 
       {/* Room Header - UPDATED */}
       <div style={{
@@ -124,8 +178,10 @@ export default function ChatPanel({ user, room, onSendMessage = null }) {
         borderBottom: '1px solid rgba(255,255,255,0.1)',
         background: 'linear-gradient(to right, rgba(76, 29, 149, 0.4), rgba(0, 0, 0, 0.6))',
         display: 'flex',
-        alignItems: 'center'
+        alignItems: 'center',
+        justifyContent: 'space-between' // Change to space-between
       }}>
+        {/* Left side - Room info */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <div style={{ fontSize: '24px' }}>💬</div>
           <div>
@@ -135,6 +191,14 @@ export default function ChatPanel({ user, room, onSendMessage = null }) {
             </div>
           </div>
         </div>
+
+        {/* Right side - RoomMembersPanel */}
+        <RoomMembersPanel
+          room={room}
+          user={user}
+          onKickUser={handleKickUser}
+          onTransferOwnership={handleTransferOwnership}
+        />
       </div>
 
       {/* Messages Container */}
