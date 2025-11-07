@@ -665,3 +665,33 @@ CREATE TRIGGER prevent_banned_messages
   BEFORE INSERT ON room_messages
   FOR EACH ROW
   EXECUTE FUNCTION check_room_ban_before_message();
+
+-- Add constraint to prevent users from being in multiple rooms
+-- First remove any existing duplicate memberships
+DELETE FROM user_room_memberships 
+WHERE id IN (
+  SELECT id FROM (
+    SELECT id, ROW_NUMBER() OVER (
+      PARTITION BY user_id 
+    ) as rn 
+    FROM user_room_memberships
+  ) t WHERE t.rn > 1
+);
+
+-- Add unique constraint to prevent future duplicates
+ALTER TABLE user_room_memberships 
+DROP CONSTRAINT IF EXISTS user_room_memberships_single_room;
+
+ALTER TABLE user_room_memberships 
+ADD CONSTRAINT user_room_memberships_single_room 
+UNIQUE (user_id);
+
+DELETE FROM user_room_memberships 
+WHERE id IN (
+  SELECT id FROM (
+    SELECT id, ROW_NUMBER() OVER (
+      PARTITION BY user_id ORDER BY joined_at DESC
+    ) as rn 
+    FROM user_room_memberships
+  ) t WHERE t.rn > 1
+);
