@@ -1,5 +1,7 @@
 // src/components/BuyMeACoffee.jsx
-export default function BuyMeACoffee() {
+import { memo } from 'react';
+
+const BuyMeACoffee = memo(() => {
   const handleClick = () => {
     window.open('https://buymeacoffee.com/nessm', '_blank', 'noopener,noreferrer');
   };
@@ -21,4 +23,6 @@ export default function BuyMeACoffee() {
       <div className="absolute inset-0 rounded-2xl border-2 border-amber-300/50 animate-pulse group-hover:animate-none" />
     </button>
   );
-}
+});
+
+export default BuyMeACoffee;

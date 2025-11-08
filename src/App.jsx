@@ -1,33 +1,75 @@
 // src/App.jsx
 import React, { useEffect, useRef, useState } from "react";
 import { supabase, supabaseService } from "./supabaseClient";
-import AuthPage from "./components/AuthPage";
-import NightSky from "./components/NightSky";
+import { AuthPage, NightSky } from "./components";
+import { LoadingSpinner } from "./components"; // ADD THIS IMPORT
+import { useAuth, useUsers, useChat, useFriends, useRooms, useUserMovement } from "./hooks"; // ADD useUserMovement
 import "./index.css";
 
+// ... rest of your App.jsx code remains the same
+
+// ... rest of your App.jsx code remains the same
+
 export default function App() {
-  const [user, setUser] = useState(null);
-  const [users, setUsers] = useState([]);
-  const [messages, setMessages] = useState([]);
-  const [privateMessages, setPrivateMessages] = useState({}); // { friendId: [messages] }
-  const [loading, setLoading] = useState(true);
-  const [followingList, setFollowingList] = useState([]);
-  const [recentFriendships, setRecentFriendships] = useState([]);
-  const [friends, setFriends] = useState([]); // Mutual friends
-  const [rooms, setRooms] = useState([]);
-  const [currentUserRoom, setCurrentUserRoom] = useState(null);
 
-  const isSigningOutRef = useRef(false);
   const driftRef = useRef({});
-  const hasSentJoinMessageRef = useRef(false);
 
+  const {
+    user,
+    setUser,
+    loading,
+    setLoading,
+    isSigningOutRef,
+    hasSentJoinMessageRef,
+    markUserOnline,
+    markUserOfflineViaService,
+    sendSystemMessage
+  } = useAuth();
+
+  const {
+    users,
+    setUsers,
+    followingList,
+    setFollowingList,
+    fetchAllUsers,
+    fetchFollowingList
+  } = useUsers(user);
+
+  const {
+    messages,
+    setMessages,
+    privateMessages,
+    setPrivateMessages,
+    handleSendMessage,
+    handleSendPrivateMessage
+  } = useChat(user);
+
+  const {
+    friends,
+    setFriends,
+    recentFriendships,
+    fetchFriends,
+    fetchPrivateMessages
+  } = useFriends(user, privateMessages, setPrivateMessages);
+
+  const {
+    rooms,
+    setRooms,
+    currentUserRoom,
+    setCurrentUserRoom,
+    fetchRooms,
+    fetchCurrentUserRoom,
+    updateRoomSlots
+  } = useRooms(user);
+
+  useUserMovement(user, setUsers);
   // Initial session + auth listener
   useEffect(() => {
     (async () => {
       const { data } = await supabase.auth.getSession();
       if (data?.session?.user) {
         setUser(data.session.user);
-        await markUserOnline(data.session.user);
+        await markUserOnline(data.session.user, fetchAllUsers);
       }
       setLoading(false);
     })();
@@ -37,7 +79,7 @@ export default function App() {
       if (event === "SIGNED_IN" && session?.user) {
         console.log("👤 Setting user state:", session.user.email);
         setUser(session.user);
-        markUserOnline(session.user).catch((e) => console.error(e));
+        markUserOnline(session.user, fetchAllUsers).catch((e) => console.error(e));
 
         // FIX: Wait for React to update the user state BEFORE loading room data
         setTimeout(async () => {
@@ -84,139 +126,6 @@ export default function App() {
 
     return () => sub.subscription.unsubscribe();
   }, []);
-
-  // Add this useEffect to App.jsx (with other useEffects)
-  // Real-time subscription for room memberships
-  useEffect(() => {
-    if (!user) return;
-
-    const membershipChannel = supabase
-      .channel('user_room_memberships_changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'user_room_memberships',
-          filter: `user_id=eq.${user.id}`
-        },
-        (payload) => {
-          console.log('🔄 User room membership changed:', payload);
-          if (payload.eventType === 'INSERT') {
-            setCurrentUserRoom(payload.new.room_id);
-          } else if (payload.eventType === 'DELETE') {
-            setCurrentUserRoom(null);
-          }
-          // Refresh rooms to update slot counts
-          fetchRooms();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(membershipChannel);
-    };
-  }, [user]);
-  // Realtime subscription for user positions
-  useEffect(() => {
-    const channel = supabase
-      .channel("user_positions_changes")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "user_positions" },
-        (payload) => {
-          const row = payload.new;
-          if (!row) return;
-          setUsers((prev) => {
-            const email = (row.email || "").toLowerCase();
-            const idx = prev.findIndex((p) => (p.email || "").toLowerCase() === email);
-            if (idx >= 0) {
-              const copy = [...prev];
-              copy[idx] = { ...copy[idx], ...row };
-              return copy;
-            } else {
-              return [...prev, row];
-            }
-          });
-        }
-      )
-      .subscribe((status) => console.log("Realtime status:", status));
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, []);
-
-  // Realtime subscription for public chat messages
-  useEffect(() => {
-    if (!user) return;
-
-    const chatChannel = supabase
-      .channel('chat_messages')
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'chat_messages'
-        },
-        (payload) => {
-          const newMessage = payload.new;
-          const messageTime = new Date(newMessage.created_at);
-          const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
-
-          if (messageTime > fiveMinutesAgo) {
-            setMessages(prev => [...prev, newMessage]);
-          }
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(chatChannel);
-    };
-  }, [user]);
-
-  // Realtime subscription for private messages
-  // Realtime subscription for private messages - UPDATED VERSION
-  useEffect(() => {
-    if (!user) return;
-
-    const privateChannel = supabase
-      .channel('private_messages')
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'private_messages'
-        },
-        async (payload) => {
-          const newMessage = payload.new;
-
-          // Check if this message is for the current user
-          if (newMessage.receiver_id === user.id || newMessage.sender_id === user.id) {
-            const friendId = newMessage.sender_id === user.id ? newMessage.receiver_id : newMessage.sender_id;
-
-            // If the message is for the current user and they're viewing the chat, mark as read immediately
-            if (newMessage.receiver_id === user.id) {
-              // Check if we're currently viewing this friend's chat
-              // We'll handle this in the PrivateChatPopup component
-            }
-
-            setPrivateMessages(prev => ({
-              ...prev,
-              [friendId]: [...(prev[friendId] || []), newMessage]
-            }));
-          }
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(privateChannel);
-    };
-  }, [user]);
 
   // Initial fetch of users and friends
   useEffect(() => {
@@ -267,355 +176,79 @@ export default function App() {
     };
   }, [user]);
 
-  // Auto-clean old messages every 5 minutes
-  useEffect(() => {
+  // In App.jsx - Fix the joinRoom function
+  const joinRoom = async (roomId) => {
     if (!user) return;
 
-    const cleanupInterval = setInterval(async () => {
-      try {
-        const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-        await supabase
-          .from('chat_messages')
-          .delete()
-          .lt('created_at', oneHourAgo);
-      } catch (error) {
-        console.error('Error cleaning old messages:', error);
-      }
-    }, 5 * 60 * 1000);
-
-    return () => clearInterval(cleanupInterval);
-  }, [user]);
-
-  // In App.jsx - Fix the joinRoom function
-const joinRoom = async (roomId) => {
-  if (!user) return;
-
-  try {
-    console.log('🔄 joinRoom: Starting process for room:', roomId);
-    console.log('🔍 joinRoom: Current user:', user.id, user.email);
-
-    // STEP 1: Get current room membership BEFORE any changes
-    const { data: currentMemberships, error: currentError } = await supabase
-      .from('user_room_memberships')
-      .select('room_id')
-      .eq('user_id', user.id);
-
-    if (currentError) {
-      console.error('❌ joinRoom: Error fetching current memberships:', currentError);
-      throw currentError;
-    }
-
-    const oldRoomId = currentMemberships && currentMemberships.length > 0 ? currentMemberships[0].room_id : null;
-    console.log('📊 joinRoom: User currently in room:', oldRoomId);
-
-    // STEP 2: Leave current room if exists (CRITICAL FIX)
-    if (oldRoomId) {
-      console.log('🚪 joinRoom: Leaving old room:', oldRoomId);
-      const { error: leaveError } = await supabase
-        .from('user_room_memberships')
-        .delete()
-        .eq('user_id', user.id)
-        .eq('room_id', oldRoomId);
-
-      if (leaveError) {
-        console.error('❌ joinRoom: Error leaving old room:', leaveError);
-        throw leaveError;
-      } else {
-        console.log('✅ joinRoom: Successfully left old room');
-
-        // Update slots for OLD room immediately after leaving
-        console.log('🔄 joinRoom: Updating slots for old room:', oldRoomId);
-        await updateRoomSlots(oldRoomId);
-      }
-    }
-
-    // STEP 3: Join new room
-    console.log('🎯 joinRoom: Joining new room:', roomId);
-    const { error: joinError } = await supabase
-      .from('user_room_memberships')
-      .insert({
-        user_id: user.id,
-        room_id: roomId
-      });
-
-    if (joinError) {
-      console.error('❌ joinRoom: Error joining new room:', joinError);
-      alert('Error joining room: ' + joinError.message);
-      return;
-    }
-    console.log('✅ joinRoom: Successfully joined new room');
-
-    // STEP 4: Update slots for NEW room
-    console.log('🔄 joinRoom: Updating slots for new room:', roomId);
-    await updateRoomSlots(roomId);
-
-    // STEP 5: Refresh all data
-    console.log('🔄 joinRoom: Refreshing room data...');
-    await fetchRooms();
-    await fetchCurrentUserRoom();
-
-    console.log('✅ joinRoom: Process completed successfully');
-
-  } catch (error) {
-    console.error('❌ joinRoom: Unexpected error:', error);
-    alert('Error joining room: ' + error.message);
-  }
-};
-  // Add these functions to App.jsx (around line 600, before joinRoom)
-
-  // Fetch user's current room
-  const fetchCurrentUserRoom = async (currentUser = user) => {
-    const userToCheck = currentUser || user;
-
-    if (!userToCheck) {
-      console.log('❌ fetchCurrentUserRoom: No user provided');
-      setCurrentUserRoom(null);
-      return null;
-    }
-
     try {
-      console.log('🔄 fetchCurrentUserRoom: Fetching for user:', userToCheck.id, userToCheck.email);
-      const { data: userRooms, error } = await supabase
+      console.log('🔄 joinRoom: Starting process for room:', roomId);
+      console.log('🔍 joinRoom: Current user:', user.id, user.email);
+
+      // STEP 1: Get current room membership BEFORE any changes
+      const { data: currentMemberships, error: currentError } = await supabase
         .from('user_room_memberships')
         .select('room_id')
-        .eq('user_id', userToCheck.id);
+        .eq('user_id', user.id);
 
-      if (error) {
-        console.error('❌ Error fetching user rooms:', error);
-        setCurrentUserRoom(null);
-        return null;
+      if (currentError) {
+        console.error('❌ joinRoom: Error fetching current memberships:', currentError);
+        throw currentError;
       }
 
-      console.log('✅ User room memberships found:', userRooms);
+      const oldRoomId = currentMemberships && currentMemberships.length > 0 ? currentMemberships[0].room_id : null;
+      console.log('📊 joinRoom: User currently in room:', oldRoomId);
 
-      if (userRooms && userRooms.length > 0) {
-        const roomId = userRooms[0].room_id;
-        setCurrentUserRoom(roomId);
-        console.log('✅ Current user room set to:', roomId);
-        return roomId;
-      } else {
-        setCurrentUserRoom(null);
-        console.log('✅ User is not in any room');
-        return null;
-      }
-    } catch (err) {
-      console.error('❌ fetchCurrentUserRoom error:', err);
-      setCurrentUserRoom(null);
-      return null;
-    }
-  };
+      // STEP 2: Leave current room if exists (CRITICAL FIX)
+      if (oldRoomId) {
+        console.log('🚪 joinRoom: Leaving old room:', oldRoomId);
+        const { error: leaveError } = await supabase
+          .from('user_room_memberships')
+          .delete()
+          .eq('user_id', user.id)
+          .eq('room_id', oldRoomId);
 
-  // Fetch all public rooms
-  const fetchRooms = async () => {
-    try {
-      console.log('🔄 Fetching rooms...');
+        if (leaveError) {
+          console.error('❌ joinRoom: Error leaving old room:', leaveError);
+          throw leaveError;
+        } else {
+          console.log('✅ joinRoom: Successfully left old room');
 
-      // First get the basic room data
-      const { data: roomsData, error } = await supabase
-        .from('chat_rooms')
-        .select('*')
-        .eq('is_public', true)
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-
-      console.log('✅ Basic rooms fetched:', roomsData);
-
-      // Then fetch creator emails for each room
-      const roomsWithCreators = await Promise.all(
-        roomsData.map(async (room) => {
-          try {
-            const { data: creator } = await supabase
-              .from('user_positions')
-              .select('email')
-              .eq('user_id', room.owner_id)
-              .single();
-
-            return {
-              ...room,
-              creator_email: creator?.email || 'Unknown'
-            };
-          } catch (err) {
-            console.error(`❌ Error fetching creator for room ${room.name}:`, err);
-            return {
-              ...room,
-              creator_email: 'Unknown'
-            };
-          }
-        })
-      );
-
-      console.log('✅ Rooms with creators:', roomsWithCreators);
-      setRooms(roomsWithCreators);
-      return roomsWithCreators;
-
-    } catch (e) {
-      console.error("❌ fetchRooms error", e);
-      return [];
-    }
-  };
-
-  async function fetchAllUsers() {
-    try {
-      const { data, error } = await supabase.from("user_positions").select("*");
-      if (error) throw error;
-      setUsers(data || []);
-    } catch (e) {
-      console.error("fetchAllUsers error", e);
-    }
-  }
-
-  // Fetch mutual friends
-  async function fetchFriends() {
-    if (!user) return;
-    console.log('🔄 fetchFriends called for user:', user.id, user.email);
-
-    try {
-      const { data, error } = await supabase.rpc('get_mutual_friends', { user_uuid: user.id });
-
-      if (error) {
-        console.error('❌ fetchFriends RPC error:', error);
-        throw error;
+          // Update slots for OLD room immediately after leaving
+          console.log('🔄 joinRoom: Updating slots for old room:', oldRoomId);
+          await updateRoomSlots(oldRoomId);
+        }
       }
 
-      console.log('✅ fetchFriends result:', {
-        user: user.id,
-        friendsCount: data?.length || 0,
-        friends: data
-      });
-
-      setFriends(data || []);
-
-      // Fetch existing private messages for each friend
-      if (data && data.length > 0) {
-        data.forEach(friend => {
-          console.log('📨 Fetching private messages for friend:', friend.friend_id);
-          fetchPrivateMessages(friend.friend_id);
-        });
-      } else {
-        console.log('ℹ️ No friends found for user');
-      }
-
-    } catch (err) {
-      console.error("fetchFriends error:", err);
-    }
-  }
-
-  async function fetchPrivateMessages(friendId) {
-    if (!user) return;
-    try {
-      const { data, error } = await supabase
-        .from('private_messages')
-        .select('*')
-        .or(`and(sender_id.eq.${user.id},receiver_id.eq.${friendId}),and(sender_id.eq.${friendId},receiver_id.eq.${user.id})`)
-        .order('created_at', { ascending: true });
-
-      if (error) throw error;
-
-      setPrivateMessages(prev => ({
-        ...prev,
-        [friendId]: data || []
-      }));
-    } catch (err) {
-      console.error("fetchPrivateMessages error:", err);
-    }
-  }
-
-  // System message function
-  const sendSystemMessage = async (content, type = 'info') => {
-    try {
-      await supabase
-        .from('chat_messages')
+      // STEP 3: Join new room
+      console.log('🎯 joinRoom: Joining new room:', roomId);
+      const { error: joinError } = await supabase
+        .from('user_room_memberships')
         .insert({
-          sender_email: 'system',
-          sender_id: '00000000-0000-0000-0000-000000000000',
-          content: content,
-          type: type,
-          created_at: new Date().toISOString()
+          user_id: user.id,
+          room_id: roomId
         });
-    } catch (error) {
-      console.error('Error sending system message:', error);
-    }
-  };
 
-  // Update the markUserOnline function to check for duplicates
-  async function markUserOnline(authUser) {
-    try {
-      const email = (authUser.email || "").toLowerCase();
-      const { error } = await supabase.rpc("get_or_create_user_position", {
-        p_user_id: authUser.id,
-        p_email: email,
-      });
-      if (error) throw error;
-      await fetchAllUsers();
-
-      if (!hasSentJoinMessageRef.current) {
-        await sendSystemMessage(`${authUser.email} joined the chat`, 'join');
-        hasSentJoinMessageRef.current = true;
+      if (joinError) {
+        console.error('❌ joinRoom: Error joining new room:', joinError);
+        alert('Error joining room: ' + joinError.message);
+        return;
       }
-    } catch (e) {
-      console.error("markUserOnline error", e);
-    }
-  }
+      console.log('✅ joinRoom: Successfully joined new room');
 
-  async function fetchFollowingList() {
-    if (!user) return;
-    try {
-      const { data, error } = await supabase
-        .from("user_follows")
-        .select("followee_id")
-        .eq("follower_id", user.id);
-      if (error) throw error;
-      setFollowingList(data.map((d) => d.followee_id));
-    } catch (err) {
-      console.error("fetchFollowingList error:", err);
-    }
-  }
+      // STEP 4: Update slots for NEW room
+      console.log('🔄 joinRoom: Updating slots for new room:', roomId);
+      await updateRoomSlots(roomId);
 
-  // Reliable offline call
-  async function markUserOfflineViaService(email) {
-    try {
-      await supabaseService.rpc("mark_user_offline_by_email", { user_email: email });
-      await fetchAllUsers();
-    } catch (e) {
-      console.error("markUserOfflineViaService error", e);
-    }
-  }
+      // STEP 5: Refresh all data
+      console.log('🔄 joinRoom: Refreshing room data...');
+      await fetchRooms();
+      await fetchCurrentUserRoom();
 
-  // Handle sending public chat messages
-  const handleSendMessage = async (content) => {
-    if (!user || !content.trim()) return;
+      console.log('✅ joinRoom: Process completed successfully');
 
-    try {
-      await supabase
-        .from('chat_messages')
-        .insert({
-          sender_email: user.email,
-          sender_id: user.id,
-          content: content.trim(),
-          type: 'user',
-          created_at: new Date().toISOString()
-        });
     } catch (error) {
-      console.error('Error sending message:', error);
-    }
-  };
-
-  // Handle sending private messages
-  const handleSendPrivateMessage = async (friendId, content) => {
-    if (!user || !content.trim()) return;
-
-    try {
-      await supabase
-        .from('private_messages')
-        .insert({
-          sender_id: user.id,
-          receiver_id: friendId,
-          content: content.trim(),
-          created_at: new Date().toISOString()
-        });
-    } catch (error) {
-      console.error('Error sending private message:', error);
+      console.error('❌ joinRoom: Unexpected error:', error);
+      alert('Error joining room: ' + error.message);
     }
   };
 
@@ -796,7 +429,7 @@ const joinRoom = async (roomId) => {
     setUsers((prev) => prev.map((u) => ((u.email || "").toLowerCase() === email ? { ...u, is_online: false, luminosity: 0.1 } : u)));
 
     try {
-      await markUserOfflineViaService(email);
+      await markUserOfflineViaService(email, fetchAllUsers);
       try { await supabase.removeAllChannels(); } catch (e) { console.warn("removeAllChannels failed", e); }
       const { error } = await supabase.auth.signOut();
       if (error) console.warn("auth.signOut error", error);
@@ -811,48 +444,6 @@ const joinRoom = async (roomId) => {
     }
   }
 
-  // Add this helper function to App.jsx
-  // Replace the updateRoomSlots function in App.jsx with this debug version
-  // Replace the updateRoomSlots function in App.jsx with this improved version
-  const updateRoomSlots = async (roomId) => {
-    if (!roomId) {
-      console.log('❌ updateRoomSlots: No roomId provided');
-      return;
-    }
-
-    try {
-      console.log(`🔄 updateRoomSlots: Starting for room ${roomId}`);
-
-      // Count members in this room
-      const { data: members, error } = await supabase
-        .from('user_room_memberships')
-        .select('id, user_id')
-        .eq('room_id', roomId);
-
-      if (error) {
-        console.error('❌ updateRoomSlots: Error counting members:', error);
-        return;
-      }
-
-      const memberCount = members?.length || 0;
-      console.log(`📊 updateRoomSlots: Room ${roomId} has ${memberCount} members`);
-
-      // Update the room's current_slots
-      const { error: updateError } = await supabase
-        .from('chat_rooms')
-        .update({ current_slots: memberCount })
-        .eq('id', roomId);
-
-      if (updateError) {
-        console.error('❌ updateRoomSlots: Error updating database:', updateError);
-      } else {
-        console.log(`✅ updateRoomSlots: Successfully updated room ${roomId} to ${memberCount} slots`);
-      }
-
-    } catch (err) {
-      console.error('❌ updateRoomSlots: Unexpected error:', err);
-    }
-  };
 
   // Add this function to App.jsx (around line 570)
   const reloadAllFriendshipData = async () => {
@@ -906,80 +497,7 @@ const joinRoom = async (roomId) => {
     }
   };
 
-  // Movement: current user updates position every 3000ms
-  useEffect(() => {
-    if (!user) return;
-    const email = (user.email || "").toLowerCase();
-
-    if (!driftRef.current[email]) {
-      driftRef.current[email] = {
-        dx: (Math.random() - 0.5) * 0.01,
-        dy: (Math.random() - 0.5) * 0.01,
-      };
-    }
-
-    const id = setInterval(() => {
-      setUsers((prev) => {
-        return prev.map((u) => {
-          if ((u.email || "").toLowerCase() !== email || !u.is_online) return u;
-          let nx = (u.current_x ?? u.initial_x ?? 0.5) + driftRef.current[email].dx;
-          let ny = (u.current_y ?? u.initial_y ?? 0.5) + driftRef.current[email].dy;
-          if (nx > 1) nx = 0;
-          if (nx < 0) nx = 1;
-          if (ny > 1) ny = 0;
-          if (ny < 0) ny = 1;
-
-          (async () => {
-            try {
-              const { error } = await supabase.rpc("update_user_position", { p_email: email, p_x: nx, p_y: ny });
-              if (error) console.warn("update_user_position error", error);
-            } catch (err) {
-              console.warn("update_user_position exception", err);
-            }
-          })();
-
-          return { ...u, current_x: nx, current_y: ny };
-        });
-      });
-    }, 3000);
-
-    return () => clearInterval(id);
-  }, [user]);
-
-  // Realtime subscription for friendship glow
-  useEffect(() => {
-    const friendshipChannel = supabase
-      .channel("friendship_events_changes")
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "friendship_events" },
-        (payload) => {
-          const { user1, user2 } = payload.new;
-          const timestamp = Date.now();
-          setRecentFriendships((prev) => [
-            ...prev,
-            { user1, user2, timestamp },
-          ]);
-          setTimeout(() => {
-            setRecentFriendships((prev) =>
-              prev.filter((f) => f.timestamp !== timestamp)
-            );
-          }, 5000);
-
-          // Refresh friends list when new friendship is detected
-          fetchFriends();
-        }
-      )
-      .subscribe((status) =>
-        console.log("Realtime friendship event status:", status)
-      );
-
-    return () => {
-      supabase.removeChannel(friendshipChannel);
-    };
-  }, []);
-
-  if (loading) return <div className="min-h-screen flex items-center justify-center text-white">Loading...</div>;
+  if (loading) return <LoadingSpinner message="Connecting to the starry sky..." />;
 
   if (!user) return <AuthPage onSignIn={() => supabase.auth.signInWithOAuth({ provider: "google" })} />;
 

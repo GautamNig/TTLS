@@ -1,6 +1,6 @@
 // Update RoomListPanel.jsx - Add join functionality
 import React, { useState, useEffect } from "react";
-import { supabase } from "../supabaseClient";
+import { supabase } from "../../supabaseClient";
 
 export default function RoomListPanel({ user }) {
   const [rooms, setRooms] = useState([]);

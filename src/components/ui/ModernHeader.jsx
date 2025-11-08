@@ -1,8 +1,8 @@
 // src/components/ModernHeader.jsx
-import React from "react";
+import React, { memo } from "react";
 import BuyMeACoffee from "./BuyMeACoffee";
 
-export default function ModernHeader({ user, onSignOut, onTwinkle }) {
+const ModernHeader = memo(({ user, onSignOut, onTwinkle }) => {
   return (
     <header className="absolute top-6 left-6 right-6 flex justify-between items-center z-30">
       {/* User Info */}
@@ -38,4 +38,6 @@ export default function ModernHeader({ user, onSignOut, onTwinkle }) {
       </div>
     </header>
   );
-}
+});
+
+export default ModernHeader;

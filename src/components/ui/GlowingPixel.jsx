@@ -1,20 +1,20 @@
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, memo, useMemo } from "react";
 
-export default function GlowingPixel({
+// Wrap the component with memo to prevent unnecessary re-renders
+const GlowingPixel = memo(({
   userData,
   allUsers = [],
   isCurrentUser,
   onFollow,
   recentFriendships = [],
   isFollowing = false,
-}) {
+}) => {
   const [pos, setPos] = useState({
     x: userData.current_x ?? userData.initial_x ?? Math.random(),
     y: userData.current_y ?? userData.initial_y ?? Math.random(),
   });
   const [lum, setLum] = useState(userData.luminosity ?? 0.8);
   const [twinkle, setTwinkle] = useState(!!userData.is_twinkle);
-  const [followed, setFollowed] = useState(false);
   const trailRef = useRef([]);
 
   // smooth movement animation
@@ -49,30 +49,38 @@ export default function GlowingPixel({
     setTwinkle(!!userData.is_twinkle);
   }, [userData.luminosity, userData.is_twinkle]);
 
-  const baseColor = userData.is_online
-    ? isCurrentUser
-      ? "#ffe97a"
-      : "#ffffff"
-    : "#ff6b6b";
+  // MEMOIZED: Base color calculation
+  const baseColor = useMemo(() => {
+    return userData.is_online
+      ? isCurrentUser
+        ? "#ffe97a"
+        : "#ffffff"
+      : "#ff6b6b";
+  }, [userData.is_online, isCurrentUser]);
 
-  const size = isCurrentUser ? 30 : 22;
+   const size = useMemo(() => isCurrentUser ? 18 : 12, [isCurrentUser]);
 
   // Check if friendship glow applies
-  const friendConnection = recentFriendships.find(
-    (f) =>
-      (f.user1 === userData.user_id &&
-        allUsers.find((u) => u.user_id === f.user2)) ||
-      (f.user2 === userData.user_id &&
-        allUsers.find((u) => u.user_id === f.user1))
-  );
+  const friendConnection = useMemo(() => {
+    return recentFriendships.find(
+      (f) =>
+        (f.user1 === userData.user_id &&
+          allUsers.find((u) => u.user_id === f.user2)) ||
+        (f.user2 === userData.user_id &&
+          allUsers.find((u) => u.user_id === f.user1))
+    );
+  }, [recentFriendships, userData.user_id, allUsers]);
 
-  const connectedUser = friendConnection
-    ? allUsers.find(
-      (u) =>
-        u.user_id === friendConnection.user1 ||
-        u.user_id === friendConnection.user2
-    )
-    : null;
+  // MEMOIZED: Connected user
+  const connectedUser = useMemo(() => {
+    return friendConnection
+      ? allUsers.find(
+        (u) =>
+          u.user_id === friendConnection.user1 ||
+          u.user_id === friendConnection.user2
+      )
+      : null;
+  }, [friendConnection, allUsers]);
 
   return (
     <>
@@ -157,4 +165,6 @@ export default function GlowingPixel({
       </div>
     </>
   );
-}
+});
+
+export default GlowingPixel;

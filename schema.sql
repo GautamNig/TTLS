@@ -160,6 +160,9 @@ CREATE POLICY "Allow insert for all users" ON chat_messages
 CREATE POLICY "Allow read for all users" ON chat_messages
     FOR SELECT USING (true);
 
+-- Add DELETE policy for chat_messages (for cleanup)
+CREATE POLICY "Allow delete for system cleanup" ON chat_messages
+    FOR DELETE USING (true);
 -- Add this to your existing schema.sql
 -- Private messages table
 -- Recreate the table with all policies
@@ -247,22 +250,31 @@ BEGIN
 END;
 $$;
 
--- Functions for user management
+-- Update the get_or_create_user_position function to handle conflicts better
 CREATE OR REPLACE FUNCTION get_or_create_user_position(p_user_id UUID, p_email TEXT)
 RETURNS SETOF user_positions
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    INSERT INTO user_positions (user_id, email, is_online, last_seen, luminosity)
-    VALUES (p_user_id, p_email, true, NOW(), 0.8)
-    ON CONFLICT (email) 
-    DO UPDATE SET 
+    -- First try to update existing user
+    UPDATE user_positions 
+    SET 
         is_online = true,
         last_seen = NOW(),
         luminosity = 0.8
-    WHERE user_positions.email = p_email;
+    WHERE user_id = p_user_id;
     
-    RETURN QUERY SELECT * FROM user_positions WHERE email = p_email;
+    -- If no rows were updated, insert new user
+    IF NOT FOUND THEN
+        INSERT INTO user_positions (user_id, email, is_online, last_seen, luminosity, initial_x, initial_y)
+        VALUES (p_user_id, p_email, true, NOW(), 0.8, random(), random())
+        ON CONFLICT (user_id) DO UPDATE SET
+            is_online = EXCLUDED.is_online,
+            last_seen = EXCLUDED.last_seen,
+            luminosity = EXCLUDED.luminosity;
+    END IF;
+    
+    RETURN QUERY SELECT * FROM user_positions WHERE user_id = p_user_id;
 END;
 $$;
 
@@ -695,3 +707,36 @@ WHERE id IN (
     FROM user_room_memberships
   ) t WHERE t.rn > 1
 );
+
+-- Function to clean messages from empty rooms
+CREATE OR REPLACE FUNCTION clean_messages_from_empty_rooms()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- Check if the room is now empty (after this membership change)
+    IF NOT EXISTS (
+        SELECT 1 FROM user_room_memberships 
+        WHERE room_id = COALESCE(NEW.room_id, OLD.room_id)
+    ) THEN
+        -- Room is empty, delete all messages from this room
+        DELETE FROM room_messages 
+        WHERE room_id = COALESCE(NEW.room_id, OLD.room_id);
+        
+        RAISE NOTICE '🧹 Cleared messages from empty room: %', COALESCE(NEW.room_id, OLD.room_id);
+    END IF;
+    
+    RETURN COALESCE(NEW, OLD);
+END;
+$$;
+
+-- Trigger to clean messages when room becomes empty
+DROP TRIGGER IF EXISTS clean_empty_room_messages ON user_room_memberships;
+CREATE TRIGGER clean_empty_room_messages
+    AFTER DELETE ON user_room_memberships
+    FOR EACH ROW
+    EXECUTE FUNCTION clean_messages_from_empty_rooms();
+
+-- Allow system/trigger to delete room messages (bypass RLS for cleanup)
+CREATE POLICY "Allow system to delete room messages for cleanup" ON room_messages
+    FOR DELETE USING (true);

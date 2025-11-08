@@ -1,6 +1,6 @@
 // Update CreateRoomPopup.jsx - Add supabase import
 import React, { useState } from "react";
-import { supabase } from "../supabaseClient"; // ADD THIS IMPORT
+import { supabase } from "../../supabaseClient"; // ADD THIS IMPORT
 
 export default function CreateRoomPopup({ user, onCreateRoom, onClose }) {
   const [roomName, setRoomName] = useState("");

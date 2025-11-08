@@ -1,8 +1,8 @@
 // src/components/RoomMembersPanel.jsx
 import React, { useState, useEffect } from "react";
-import { supabase } from "../supabaseClient";
+import { supabase } from "../../supabaseClient";
 
-export default function RoomMembersPanel({ room, user, onKickUser, onTransferOwnership }) {
+export default function RoomMembersPanel({ room, user, onTransferOwnership }) {
     const [isExpanded, setIsExpanded] = useState(false);
     const [roomMembers, setRoomMembers] = useState([]);
     const [loading, setLoading] = useState(false);
@@ -76,7 +76,7 @@ export default function RoomMembersPanel({ room, user, onKickUser, onTransferOwn
 
             // STEP 4: Update room slots
             if (typeof onKickUser === 'function') {
-                onKickUser(userId); // This should update room slots
+                handleKickUser(userId); // This should update room slots
             }
 
             alert('💥 SPINNING BACK KICK! User has been BANNED from this room!');
@@ -86,6 +86,58 @@ export default function RoomMembersPanel({ room, user, onKickUser, onTransferOwn
             alert('Error banning user: ' + error.message);
         }
     };
+
+    // In RoomMembersPanel.jsx - Update handleKickUser function
+const handleKickUser = async (userId) => {
+
+  try {
+    // Get user email for immediate UI update
+    const { data: userData } = await supabase
+      .from('user_positions')
+      .select('email')
+      .eq('user_id', userId)
+      .single();
+
+    const kickedUserEmail = userData?.email;
+
+    const { error } = await supabase
+      .from('user_room_memberships')
+      .delete()
+      .eq('user_id', userId)
+      .eq('room_id', room.id);
+
+    if (error) throw error;
+
+    console.log('✅ User kicked successfully');
+
+    // IMMEDIATE UI UPDATE: If kicking ourselves, clear room immediately
+    if (userId === user.id) {
+      console.log('🔄 Immediate UI update: Kicked ourselves, clearing room');
+      // Force immediate room clear
+      if (typeof window.forceLeaveRoom === 'function') {
+        window.forceLeaveRoom(room.id);
+      }
+    }
+
+    // Update room slots
+    const { data: members } = await supabase
+      .from('user_room_memberships')
+      .select('id')
+      .eq('room_id', room.id);
+
+    const memberCount = members?.length || 0;
+    await supabase
+      .from('chat_rooms')
+      .update({ current_slots: memberCount })
+      .eq('id', room.id);
+
+    console.log('✅ Room slots updated to:', memberCount);
+
+  } catch (error) {
+    console.error('❌ Error kicking user:', error);
+    alert('Error kicking user: ' + error.message);
+  }
+};
 
     // Unban user function  
     const handleUnbanUser = async (banId) => {
@@ -407,7 +459,7 @@ export default function RoomMembersPanel({ room, user, onKickUser, onTransferOwn
                                         <button
                                             onClick={(e) => {
                                                 e.stopPropagation();
-                                                onKickUser(member.user_id);
+                                                handleKickUser(member.user_id);
                                             }}
                                             title="Kick User"
                                             style={{

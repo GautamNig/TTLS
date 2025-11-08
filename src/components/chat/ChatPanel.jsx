@@ -1,7 +1,7 @@
 // src/components/ChatPanel.jsx - UPDATED FOR ROOMS
 import React, { useEffect, useRef, useState } from "react";
 import RoomMembersPanel from "./RoomMembersPanel";
-import { supabase } from "../supabaseClient"; // ADD THIS IMPORT
+import { supabase } from "../../supabaseClient"; // ADD THIS IMPORT
 
 export default function ChatPanel({ user, room, onSendMessage = null }) {
   const [text, setText] = useState("");
@@ -95,54 +95,75 @@ export default function ChatPanel({ user, room, onSendMessage = null }) {
     };
   }, [room]);
 
-  useEffect(() => {
-    if (!room) {
-      setRoomMessages([]);
-      return;
-    }
+ useEffect(() => {
+  if (!room) {
+    console.log('🧹 Room is null, clearing room messages');
+    setRoomMessages([]); // CLEAR MESSAGES WHEN NO ROOM
+    return;
+  }
 
-    const fetchRoomMessages = async () => {
-      try {
-        console.log('🔄 Fetching room messages for:', room.name);
-        console.log('🔄 THE ROOM DATA:', room);
-        const { data, error } = await supabase
-          .from('room_messages')
-          .select('*')
-          .eq('room_id', room.id)
-          .order('created_at', { ascending: true });
+  const fetchRoomMessages = async () => {
+    try {
+      console.log('🔄 Fetching room messages for:', room.name);
+      
+      // FIRST: Get when the user joined this room
+      const { data: membership, error: membershipError } = await supabase
+        .from('user_room_memberships')
+        .select('joined_at')
+        .eq('user_id', user.id)
+        .eq('room_id', room.id)
+        .single();
 
-        if (error) throw error;
-        setRoomMessages(data || []);
-        console.log('✅ Room messages fetched:', data?.length || 0);
-      } catch (e) {
-        console.error("fetchRoomMessages error", e);
+      if (membershipError) {
+        console.error('❌ Error fetching membership:', membershipError);
+        return;
       }
-    };
 
-    fetchRoomMessages();
+      const joinTime = membership.joined_at;
+      console.log('⏰ User joined room at:', joinTime);
 
-    // Real-time subscription for room messages
-    const roomChannel = supabase
-      .channel('room_messages')
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'room_messages',
-          filter: `room_id=eq.${room.id}`
-        },
-        (payload) => {
-          console.log('🔄 New room message:', payload.new);
-          setRoomMessages(prev => [...prev, payload.new]);
-        }
-      )
-      .subscribe();
+      // SECOND: Fetch only messages created AFTER user joined
+      const { data, error } = await supabase
+        .from('room_messages')
+        .select('*')
+        .eq('room_id', room.id)
+        .gt('created_at', joinTime) // ONLY messages after join time
+        .order('created_at', { ascending: true });
 
-    return () => {
-      supabase.removeChannel(roomChannel);
-    };
-  }, [room]); // DEPENDS ON ROOM NOW
+      if (error) throw error;
+      
+      setRoomMessages(data || []);
+      console.log('✅ Room messages fetched (after join):', data?.length || 0);
+
+    } catch (e) {
+      console.error("fetchRoomMessages error", e);
+    }
+  };
+
+  fetchRoomMessages();
+
+  // Real-time subscription for room messages
+  const roomChannel = supabase
+    .channel('room_messages')
+    .on(
+      'postgres_changes',
+      {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'room_messages',
+        filter: `room_id=eq.${room.id}`
+      },
+      (payload) => {
+        console.log('🔄 New room message:', payload.new);
+        setRoomMessages(prev => [...prev, payload.new]);
+      }
+    )
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(roomChannel);
+  };
+}, [room, user]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -167,28 +188,6 @@ export default function ChatPanel({ user, room, onSendMessage = null }) {
 
   const getUsername = (email) => {
     return email.split('@')[0];
-  };
-
-  const handleKickUser = async (userId) => {
-    console.log('🚪 Kick user clicked for:', userId);
-    console.log('🚪 Kick user clicked for:', room.id);
-    if (!room || !window.confirm('Are you sure you want to kick this user from the room?')) return;
-
-    try {
-      const { error } = await supabase
-        .from('user_room_memberships')
-        .delete()
-        .eq('user_id', userId)
-        .eq('room_id', room.id);
-
-      if (error) throw error;
-
-      console.log('✅ User kicked successfully');
-      // Note: The RoomMembersPanel will auto-refresh due to real-time subscription
-    } catch (error) {
-      console.error('❌ Error kicking user:', error);
-      alert('Error kicking user: ' + error.message);
-    }
   };
 
   const handleTransferOwnership = async (newOwnerId) => {
@@ -252,7 +251,6 @@ export default function ChatPanel({ user, room, onSendMessage = null }) {
       <RoomMembersPanel
         room={room}
         user={user}
-        onKickUser={handleKickUser}
         onTransferOwnership={handleTransferOwnership}
       />
 
@@ -282,7 +280,6 @@ export default function ChatPanel({ user, room, onSendMessage = null }) {
         <RoomMembersPanel
           room={room}
           user={user}
-          onKickUser={handleKickUser}
           onTransferOwnership={handleTransferOwnership}
         />
       </div>

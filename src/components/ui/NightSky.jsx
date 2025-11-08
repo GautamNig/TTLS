@@ -1,11 +1,41 @@
-// In NightSky.jsx - update the component props and ChatPanel usage
+// src/components/ui/NightSky.jsx
 import React, { useState } from "react";
-import ModernHeader from "./ModernHeader";
+// Check if these imports are correct:
+import ModernHeader from "./ModernHeader"; // Should be correct if in same folder
 import GlowingPixel from "./GlowingPixel";
-import ChatPanel from "./ChatPanel";
-import PrivateChatPopup from "./PrivateChatPopup";
-import CreateRoomPopup from "./CreateRoomPopup";
-import RoomListPanel from "./RoomListPanel";
+import BuyMeACoffee from "./BuyMeACoffee";
+import ChatPanel from "../chat/ChatPanel";
+import PrivateChatPopup from "../chat/PrivateChatPopup";
+import RoomMembersPanel from "../chat/RoomMembersPanel";
+import CreateRoomPopup from "../rooms/CreateRoomPopup";
+import RoomListPanel from "../rooms/RoomListPanel";
+
+/**
+ * Main layout component that orchestrates the entire application UI
+ * 
+ * @param {Object} props - Component props
+ * @param {Object} props.user - Current authenticated user
+ * @param {Array} props.users - Array of all users for star display
+ * @param {Function} props.setUsers - Update users state
+ * @param {Array} props.followingList - User's following list
+ * @param {Function} props.onSignOut - Sign out handler
+ * @param {Function} props.onTwinkle - Twinkle animation handler
+ * @param {Array} props.messages - Public chat messages
+ * @param {Function} props.onSendMessage - Send public message
+ * @param {Function} props.handleFollow - Follow user handler
+ * @param {Array} props.recentFriendships - Recent friendship events for glow
+ * @param {Array} props.friends - User's friends list
+ * @param {Object} props.privateMessages - Private messages by friend ID
+ * @param {Function} props.onSendPrivateMessage - Send private message
+ * @param {Function} props.onMarkMessagesAsRead - Mark messages as read
+ * @param {string} props.currentUserRoom - Current room ID
+ * @param {Array} props.rooms - Available rooms
+ * @param {Function} props.onJoinRoom - Join room handler
+ * @param {Object} props.supabase - Supabase client instance
+ * @param {Function} props.fetchRooms - Refresh rooms list
+ * 
+ * @returns {JSX.Element} The main application layout
+ */
 
 export default function NightSky({
   user,
@@ -137,6 +167,7 @@ export default function NightSky({
         {/* Room List Panel */}
         {showRoomList && (
            <RoomListPanel 
+           key={`roomlist-${currentUserRoom || 'no-room'}`} 
     user={user}
     rooms={rooms}
     currentUserRoom={currentUserRoom}
@@ -176,11 +207,12 @@ export default function NightSky({
         flexDirection: 'column'
       }} className="bg-black/60 border-l border-white/10">
         <ChatPanel
+          key={`chatpanel-${currentUserRoom || 'no-room'}`}
           user={user}
           room={currentUserRoom ? rooms.find(r => r.id === currentUserRoom) : null}
           onSendMessage={async (content) => {
             if (!user || !currentUserRoom || !content.trim()) return;
-            
+            console.log('💬 Sending room message to:', currentUserRoom);
             try {
               await supabase
                 .from('room_messages')
